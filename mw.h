@@ -5,7 +5,7 @@
 #include <QSerialPort>
 #include <QTimer>
 #include "measurements.h"
-#include "qcustomplot.h"
+#include "qcustomplot/qcustomplot.h"
 #include "gpib/hp8114apulser.h"
 #include "gpib/hp4291analyzer.h"
 

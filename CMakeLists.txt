@@ -22,8 +22,8 @@ set(PROJECT_SOURCES
     gpib/hp4291analyzer.h
     gpib/hp8114apulser.cpp
     gpib/hp8114apulser.h
-    qcustomplot.cpp
-    qcustomplot.h
+    qcustomplot/qcustomplot.cpp
+    qcustomplot/qcustomplot.h
 )
 
 add_executable(DLTFS ${PROJECT_SOURCES}
