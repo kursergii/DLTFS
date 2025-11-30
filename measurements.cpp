@@ -1,7 +1,7 @@
 #include "measurements.h"
-#include "gpibdevice.h"
-#include "hp4291analyzer.h"
-#include "hp8114apulser.h"
+#include "gpib/gpibdevice.h"
+#include "gpib/hp4291analyzer.h"
+#include "gpib/hp8114apulser.h"
 #include <QSerialPort>
 #include <QThread>
 #include <cstdio>

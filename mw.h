@@ -6,8 +6,8 @@
 #include <QTimer>
 #include "measurements.h"
 #include "qcustomplot.h"
-#include "hp8114apulser.h"
-#include "hp4291analyzer.h"
+#include "gpib/hp8114apulser.h"
+#include "gpib/hp4291analyzer.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
