@@ -56,10 +56,6 @@ void MW::onConnectButtonClicked()
 {
     qDebug() << "Connecting to devices...";
 
-}
-
-void MW::onStartButtonClicked()
-{
     qDebug() << "Starting measurement sequence in thread...";
     connect(meas, &Measurements::sendData, this, &MW::receive_data_meas);
     connect(meas, &Measurements::connected, this, &MW::receive_connected);
@@ -69,9 +65,21 @@ void MW::onStartButtonClicked()
 
 }
 
+void MW::receive_data_meas(const QVector<double>& xData, const QVector<double>& yData){
+    updatePlot(xData, yData);
+}
+
 void MW::receive_connected(const bool& con){
     ui->startButton->setEnabled(con);
 }
+
+void MW::onStartButtonClicked()
+{
+    qDebug() << "Starting measurement sequence...";
+    ui->startButton->setEnabled(false);
+    emit init_meas();
+}
+
 
 void MW::onQuitButtonClicked()
 {

@@ -1,28 +1,4 @@
 #include "measurements.h"
-#include "gpib/gpibdevice.h"
-#include "gpib/hp4291analyzer.h"
-#include "gpib/hp8114apulser.h"
-#include <QSerialPort>
-#include <QThread>
-#include <cstdio>
-
-Measurements::Measurements(HP8114APulser *pulser, HP4291Analyzer *analyzer, QSerialPort *serialPort,
-                           int totalPoints, int maxPointsPerMeas, double tint)
-    : m_pulser(pulser)
-    , m_analyzer(analyzer)
-    , m_serialPort(serialPort)
-    , m_totalPoints(totalPoints)
-    , m_maxPointsPerMeas(maxPointsPerMeas)
-    , m_tint(tint)
-    , m_shouldStop(false)
-{
-}
-
-Measurements::~Measurements()
-{
-    stopMeasurement();
-    wait(); // Wait for thread to finish
-}
 
     // // Create GPIB device instances with specialized classes
     // pulser = new HP8114APulser(0, 14);    // HP8114A Pulser at address 14
