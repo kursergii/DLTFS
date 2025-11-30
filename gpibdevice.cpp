@@ -17,7 +17,7 @@ GpibDevice::~GpibDevice()
 bool GpibDevice::connect()
 {
     if (m_connected) {
-        return true;
+        return true; // Already connected
     }
 
     // ibdev(board, pad, sad, timeout, eot, eos)
