@@ -45,9 +45,19 @@ MW::~MW()
 
 void MW::connectSignals()
 {
-    // Connect slots and signals here
+    // Connect button slots
     QObject::connect(ui->connectButton, &QPushButton::clicked, this, &MW::onConnectButtonClicked);
     QObject::connect(ui->startButton, &QPushButton::clicked, this, &MW::onStartButtonClicked);
+    QObject::connect(ui->quitButton, &QPushButton::clicked, this, &MW::onQuitButtonClicked);
+
+    // Connect pulse parameter change signals
+    QObject::connect(ui->offsetDoubleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                     this, &MW::onOffsetChanged);
+    QObject::connect(ui->amplitudeDoubleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                     this, &MW::onAmplitudeChanged);
+    QObject::connect(ui->durationSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+                     this, &MW::onDurationChanged);
+
     // QObject::connect(serialPort, &QSerialPort::readyRead, this, &MW::onSerialDataReceived);
 
 }
@@ -60,12 +70,20 @@ void MW::onConnectButtonClicked()
     connect(meas, &Measurements::sendData, this, &MW::receive_data_meas);
     connect(meas, &Measurements::connected, this, &MW::receive_connected);
     connect(this, &MW::init_meas, meas, &Measurements::startMeasurement);
+    connect(this, &MW::send_ui, meas, &Measurements::got_ui_data);
+    connect(this, &MW::pulseParamsChanged, meas, &Measurements::updatePulseParams);
     connect(meas, &Measurements::finished, meas, &QObject::deleteLater);
     meas->start();
 
+    // Send initial pulse parameters to the thread
+    double offset = ui->offsetDoubleSpinBox->value();
+    double amplitude = ui->amplitudeDoubleSpinBox->value();
+    double duration = ui->durationSpinBox->value();
+    emit pulseParamsChanged(offset, amplitude, duration);
+
 }
 
-void MW::receive_data_meas(const QVector<double>& xData, const QVector<double>& yData){
+void MW::receive_data_meas(const int & a, const double & b){
     updatePlot(xData, yData);
 }
 
@@ -77,7 +95,12 @@ void MW::onStartButtonClicked()
 {
     qDebug() << "Starting measurement sequence...";
     ui->startButton->setEnabled(false);
-    emit init_meas();
+
+    // Get measurement parameters from UI
+    int totalPoints = ui->numMeasSpinBox->value();
+    double timeStep = ui->spinBox->value() / 1000.0;  // Convert ms to seconds
+
+    emit init_meas(totalPoints, timeStep);
 }
 
 
@@ -85,6 +108,72 @@ void MW::onQuitButtonClicked()
 {
     qDebug() << "Quitting application...";
     QApplication::quit();
+}
+
+void MW::onPulserCommandEntered()
+{
+    // TODO: Implement pulser command handling
+    qDebug() << "Pulser command entered";
+}
+
+void MW::onAnalyzerCommandEntered()
+{
+    // TODO: Implement analyzer command handling
+    qDebug() << "Analyzer command entered";
+}
+
+void MW::onSerialDataReceived()
+{
+    // TODO: Implement serial data reception
+    qDebug() << "Serial data received";
+}
+
+void MW::onArduinoTRIGButtonClicked()
+{
+    // TODO: Implement Arduino trigger button handling
+    qDebug() << "Arduino TRIG button clicked";
+}
+
+void MW::onOffsetChanged()
+{
+    // Send all pulse parameters when offset changes
+    double offset = ui->offsetDoubleSpinBox->value();
+    double amplitude = ui->amplitudeDoubleSpinBox->value();
+    double duration = ui->durationSpinBox->value();
+
+    emit pulseParamsChanged(offset, amplitude, duration);
+}
+
+void MW::onAmplitudeChanged()
+{
+    // Send all pulse parameters when amplitude changes
+    double offset = ui->offsetDoubleSpinBox->value();
+    double amplitude = ui->amplitudeDoubleSpinBox->value();
+    double duration = ui->durationSpinBox->value();
+
+    emit pulseParamsChanged(offset, amplitude, duration);
+}
+
+void MW::onDurationChanged()
+{
+    // Send all pulse parameters when duration changes
+    double offset = ui->offsetDoubleSpinBox->value();
+    double amplitude = ui->amplitudeDoubleSpinBox->value();
+    double duration = ui->durationSpinBox->value();
+
+    emit pulseParamsChanged(offset, amplitude, duration);
+}
+
+void MW::onPulserDataReceived()
+{
+    // TODO: Implement pulser data reception
+    qDebug() << "Pulser data received";
+}
+
+void MW::onAnalyzerDataReceived()
+{
+    // TODO: Implement analyzer data reception
+    qDebug() << "Analyzer data received";
 }
 
 void MW::setupPlot()

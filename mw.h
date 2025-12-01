@@ -27,10 +27,16 @@ public:
     void populateSerialPorts();
     Measurements *meas;
 
-public slots:
-    void MW::receive_connected(const bool &);
+public:
+signals:
+    void init_meas(const int &, const double &);
+    void sendData(const int &, const double &);
+    void send_ui();
+    void pulseParamsChanged(double offset, double amplitude, double duration);    
 
 private slots:
+    void receive_connected(const bool &);
+    void receive_data_meas(const int &, const double &);
     void onConnectButtonClicked();
     void onStartButtonClicked();
     void onQuitButtonClicked();
@@ -38,6 +44,7 @@ private slots:
     void onAnalyzerCommandEntered();
     void onSerialDataReceived();
     void onArduinoTRIGButtonClicked();
+    void onOffsetChanged();
     void onAmplitudeChanged();
     void onDurationChanged();
     void onPulserDataReceived();

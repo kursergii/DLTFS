@@ -10,26 +10,23 @@
 #include <QSerialPort>
 #include <cstdio>
 
-// // Forward declarations
-// class QSerialPort;
-// class HP8114APulser;
-// class HP4291Analyzer;
-
 class Measurements : public QThread
 {
     Q_OBJECT
     void run() Q_DECL_OVERRIDE {
-        
+        qDebug() << "Measurements thread started";
         //Create serial port instance
         serialPort = new QSerialPort();
         connectArduino();
+        qDebug() << "Serial port for Arduino created and connected";
         // Create GPIB device instances with specialized classes
         pulser = new HP8114APulser(0, 14);    // HP8114A Pulser at address 14
         connectPulser();
-
+        qDebug() << "HP8114A Pulser created and connected";
         analyzer = new HP4291Analyzer(0, 17); // HP4291A Analyzer at address 17
         connectAnalyzer();
-        emit connected(true);
+        qDebug() << "HP4291A Analyzer created and connected";
+        // emit connected(true);
         
         while(true)
             running();
@@ -47,10 +44,25 @@ public:
 // }
 
 signals:
-    void progressUpdate(int currentPoint, int totalPoints, double time, double capacitance);
-    void measurementComplete(QVector<double> xData, QVector<double> yData);
-    void measurementError(QString error);
-    void connected(bool status);
+    // void progressUpdate(int currentPoint, int totalPoints, double time, double capacitance);
+    // void measurementComplete(QVector<double> xData, QVector<double> yData);
+    // void measurementError(QString error);
+    void connected(const bool& status);
+    void resultsReceived();
+    void sendData(const int& pointIndex, const double& value);
+
+public slots:
+    void startMeasurement(const int & tP, const double & ti) {
+        totalPoints = tP;
+        tint = ti;
+        isMeasuring = true;
+    }
+    void got_ui_data() {
+
+    }
+    void updatePulseParams(double offset, double amplitude, double duration);
+
+private slots:
 
 private:
     HP8114APulser *pulser;        // HP8114A Pulse Generator at GPIB address 14
@@ -64,13 +76,20 @@ private:
     int totalPoints;
     int maxPointsPerMeas;
     double tint;
-    bool isMeasuring;
+    bool isMeasuring = false;
 
-    bool setUpAnalyzerForMeasurement();
+    // Pulse parameters
+    double pulseOffset = 1.0;      // Default 1V offset
+    double pulseAmplitude = 1.0;   // Default 1V amplitude
+    double pulseDuration = 100.0;  // Default 100us duration
+
+    // bool setUpAnalyzerForMeasurement();
     void connectPulser();
     void connectAnalyzer();
     void connectArduino();
     void running();
+    void waiter(int time);
+    void applyPulseSettings();
 };
 
 #endif // MEASUREMENTS_H
