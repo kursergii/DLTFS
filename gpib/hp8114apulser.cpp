@@ -49,17 +49,45 @@ bool HP8114APulser::initialize()
         qWarning() << "HP8114A: Failed to reset during initialization";
         return false;
     }
-
-    // Set to voltage mode (default for DLTFS)
-    if (!setHoldMode(HOLD_VOLTAGE)) {
-        qWarning() << "HP8114A: Failed to set voltage mode";
+    
+    if (!enableOutput(false)) {
+        qWarning() << "HP8114A: Failed to disable output during initialization";
         return false;
     }
 
-    // Query and cache initial settings
-    updateCachedValues();
+    if (!setTriggerSource(EXTERNAL)) {
+        qWarning() << "HP8114A: Failed to set trigger source during initialization";
+        return false;
+    }
+    if (!setTriggerSlope(POSITIVE)) {
+        qWarning() << "HP8114A: Failed to set trigger slope during initialization";
+        return false;
+    }
+    if (!setOutputPolarity(POLARITY_POSITIVE)) {
+        qWarning() << "HP8114A: Failed to set output polarity during initialization";
+        return false;
+    }
+    if (!setPulsePeriod(0.99)) {  // Default 10ms period
+        qWarning() << "HP8114A: Failed to set default pulse period during initialization";
+        return false;
+    }
+    if (!setPulseWidth(0.001)) { // Default 100us width
+        qWarning() << "HP8114A: Failed to set default pulse width during initialization";
+        return false;
+    }
+    if (!setVoltageAmplitude(1.0)) { // Default 1V amplitude
+        qWarning() << "HP8114A: Failed to set default voltage amplitude during initialization";
+        return false;
+    }
+    if (!enableOutput(true)) {
+        qWarning() << "HP8114A: Failed to ensure output enabled during initialization";
+        return false;
+    }
 
-    qDebug() << "HP8114A: Initialized successfully";
+    // Give device time to process the mode change
+    QThread::msleep(100);
+
+    qDebug() << "HP8114A: Initialized successfully - ready for voltage configuration";
     return true;
 }
 
@@ -69,8 +97,12 @@ bool HP8114APulser::reset()
         return false;
     }
 
-    // Wait for reset to complete
-    return waitForOperationComplete(5000);
+    // Wait for reset to complete (HP 8114A needs time to reset)
+    // Using simple delay instead of *OPC? which may not work after reset
+    QThread::msleep(500);  // 500ms should be sufficient for reset
+
+    qDebug() << "HP8114A: Reset complete";
+    return true;
 }
 
 bool HP8114APulser::clearStatus()
@@ -96,7 +128,8 @@ bool HP8114APulser::setVoltageHigh(double voltage)
         return false;
     }
 
-    QString cmd = QString(":SOURce:VOLTage:HIGH %1").arg(voltage, 0, 'E');
+    // HP 8114A requires unit suffix (V for volts)
+    QString cmd = QString(":VOLT:HIGH %1V").arg(voltage);
     if (sendCommand(cmd)) {
         m_voltageHigh = voltage;
         qDebug() << "HP8114A: Voltage HIGH set to" << voltage << "V";
@@ -112,7 +145,8 @@ bool HP8114APulser::setVoltageLow(double voltage)
         return false;
     }
 
-    QString cmd = QString(":SOURce:VOLTage:LOW %1").arg(voltage, 0, 'E');
+    // HP 8114A requires unit suffix (V for volts)
+    QString cmd = QString(":VOLT:LOW %1V").arg(voltage);
     if (sendCommand(cmd)) {
         m_voltageLow = voltage;
         qDebug() << "HP8114A: Voltage LOW set to" << voltage << "V";
@@ -128,7 +162,8 @@ bool HP8114APulser::setVoltageAmplitude(double amplitude)
         return false;
     }
 
-    QString cmd = QString(":SOURce:VOLTage:AMPLitude %1").arg(amplitude, 0, 'E');
+    // HP 8114A uses :VOLT for amplitude
+    QString cmd = QString(":VOLT %1V").arg(amplitude);
     if (sendCommand(cmd)) {
         m_voltageAmplitude = amplitude;
         qDebug() << "HP8114A: Voltage amplitude set to" << amplitude << "V";
@@ -144,7 +179,7 @@ bool HP8114APulser::setVoltageBaseline(double baseline)
         return false;
     }
 
-    QString cmd = QString(":SOURce:VOLTage:BASeline %1").arg(baseline, 0, 'E');
+    QString cmd = QString(":VOLT:BAS %1V").arg(baseline);
     if (sendCommand(cmd)) {
         m_voltageBaseline = baseline;
         qDebug() << "HP8114A: Voltage baseline set to" << baseline << "V";
@@ -155,8 +190,8 @@ bool HP8114APulser::setVoltageBaseline(double baseline)
 
 bool HP8114APulser::setVoltageLimits(double high_limit, double low_limit)
 {
-    QString cmdHigh = QString(":SOURce:VOLTage:LIMit:HIGH %1").arg(high_limit, 0, 'E');
-    QString cmdLow = QString(":SOURce:VOLTage:LIMit:LOW %1").arg(low_limit, 0, 'E');
+    QString cmdHigh = QString(":VOLT:LIM:HIGH %1V").arg(high_limit);
+    QString cmdLow = QString(":VOLT:LIM:LOW %1V").arg(low_limit);
 
     if (sendCommand(cmdHigh) && sendCommand(cmdLow)) {
         qDebug() << "HP8114A: Voltage limits set to [" << low_limit << "," << high_limit << "] V";
@@ -167,7 +202,7 @@ bool HP8114APulser::setVoltageLimits(double high_limit, double low_limit)
 
 bool HP8114APulser::enableVoltageLimits(bool enable)
 {
-    QString cmd = QString(":SOURce:VOLTage:LIMit:STATe %1").arg(enable ? "ON" : "OFF");
+    QString cmd = QString(":VOLT:LIM:STAT %1").arg(enable ? "ON" : "OFF");
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Voltage limits" << (enable ? "enabled" : "disabled");
         return true;
@@ -186,10 +221,12 @@ bool HP8114APulser::setPulseWidth(double width_sec)
         return false;
     }
 
-    QString cmd = QString(":SOURce:PULSe:WIDTh %1").arg(width_sec, 0, 'E');
+    // Convert to nanoseconds and add unit suffix
+    double width_ns = width_sec * 1e9;
+    QString cmd = QString(":PULS:WIDT %1NS").arg(width_ns);
     if (sendCommand(cmd)) {
         m_pulseWidth = width_sec;
-        qDebug() << "HP8114A: Pulse width set to" << (width_sec * 1e6) << "us";
+        qDebug() << "HP8114A: Pulse width set to" << width_ns << "ns";
         return true;
     }
     return false;
@@ -202,11 +239,13 @@ bool HP8114APulser::setPulsePeriod(double period_sec)
         return false;
     }
 
-    QString cmd = QString(":SOURce:PULSe:PERiod %1").arg(period_sec, 0, 'E');
+    // Convert to milliseconds and add unit suffix
+    double period_ms = period_sec * 1e3;
+    QString cmd = QString(":PULS:PER %1MS").arg(period_ms);
     if (sendCommand(cmd)) {
         m_pulsePeriod = period_sec;
         m_pulseFrequency = 1.0 / period_sec;
-        qDebug() << "HP8114A: Pulse period set to" << (period_sec * 1e3) << "ms ("
+        qDebug() << "HP8114A: Pulse period set to" << period_ms << "ms ("
                  << m_pulseFrequency << "Hz)";
         return true;
     }
@@ -220,7 +259,7 @@ bool HP8114APulser::setPulseFrequency(double freq_hz)
         return false;
     }
 
-    QString cmd = QString(":SOURce:FREQuency %1").arg(freq_hz, 0, 'E');
+    QString cmd = QString(":FREQ %1HZ").arg(freq_hz);
     if (sendCommand(cmd)) {
         m_pulseFrequency = freq_hz;
         m_pulsePeriod = 1.0 / freq_hz;
@@ -237,7 +276,7 @@ bool HP8114APulser::setPulseDutyCycle(double duty_percent)
         return false;
     }
 
-    QString cmd = QString(":SOURce:PULSe:DCYCle %1").arg(duty_percent, 0, 'E');
+    QString cmd = QString(":PULS:DCYC %1PCT").arg(duty_percent);
     if (sendCommand(cmd)) {
         m_pulseDutyCycle = duty_percent;
         qDebug() << "HP8114A: Pulse duty cycle set to" << duty_percent << "%";
@@ -253,9 +292,10 @@ bool HP8114APulser::setPulseDelay(double delay_sec)
         return false;
     }
 
-    QString cmd = QString(":SOURce:PULSe:DELay %1").arg(delay_sec, 0, 'E');
+    double delay_ns = delay_sec * 1e9;
+    QString cmd = QString(":PULS:DEL %1NS").arg(delay_ns);
     if (sendCommand(cmd)) {
-        qDebug() << "HP8114A: Pulse delay set to" << (delay_sec * 1e6) << "us";
+        qDebug() << "HP8114A: Pulse delay set to" << delay_ns << "ns";
         return true;
     }
     return false;
@@ -268,9 +308,10 @@ bool HP8114APulser::setTrailingEdgeDelay(double delay_sec)
         return false;
     }
 
-    QString cmd = QString(":SOURce:PULSe:TrailingTDELay %1").arg(delay_sec, 0, 'E');
+    double delay_ns = delay_sec * 1e9;
+    QString cmd = QString(":PULS:TDEL %1NS").arg(delay_ns);
     if (sendCommand(cmd)) {
-        qDebug() << "HP8114A: Trailing edge delay set to" << (delay_sec * 1e6) << "us";
+        qDebug() << "HP8114A: Trailing edge delay set to" << delay_ns << "ns";
         return true;
     }
     return false;
@@ -319,7 +360,7 @@ bool HP8114APulser::setTriggerSource(TriggerSource source)
             return false;
     }
 
-    QString cmd = QString(":TRIGger:SOURce %1").arg(sourceStr);
+    QString cmd = QString(":TRIG:SOUR %1").arg(sourceStr);
     if (sendCommand(cmd)) {
         m_triggerSource = source;
         qDebug() << "HP8114A: Trigger source set to" << sourceStr;
@@ -333,20 +374,20 @@ bool HP8114APulser::setTriggerSlope(TriggerSlope slope)
     QString slopeStr;
     switch (slope) {
         case POSITIVE:
-            slopeStr = "POSitive";
+            slopeStr = "POS";
             break;
         case NEGATIVE:
-            slopeStr = "NEGative";
+            slopeStr = "NEG";
             break;
         case EITHER:
-            slopeStr = "EITHer";
+            slopeStr = "EITH";
             break;
         default:
             qWarning() << "HP8114A: Invalid trigger slope";
             return false;
     }
 
-    QString cmd = QString(":TRIGger:SLOPe %1").arg(slopeStr);
+    QString cmd = QString(":TRIG:SLOP %1").arg(slopeStr);
     if (sendCommand(cmd)) {
         m_triggerSlope = slope;
         qDebug() << "HP8114A: Trigger slope set to" << slopeStr;
@@ -357,7 +398,7 @@ bool HP8114APulser::setTriggerSlope(TriggerSlope slope)
 
 bool HP8114APulser::setTriggerLevel(double level_v)
 {
-    QString cmd = QString(":TRIGger:LEVel %1").arg(level_v, 0, 'E');
+    QString cmd = QString(":TRIG:LEV %1V").arg(level_v);
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Trigger level set to" << level_v << "V";
         return true;
@@ -372,7 +413,7 @@ bool HP8114APulser::setTriggerCount(int count)
         return false;
     }
 
-    QString cmd = QString(":TRIGger:COUNt %1").arg(count);
+    QString cmd = QString(":TRIG:COUN %1").arg(count);
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Trigger count set to" << count;
         return true;
@@ -391,7 +432,7 @@ bool HP8114APulser::trigger()
 
 bool HP8114APulser::enableTriggerInhibit(bool enable)
 {
-    QString cmd = QString(":TRIGger:INHibit:STATe %1").arg(enable ? "ON" : "OFF");
+    QString cmd = QString(":TRIG:INH %1").arg(enable ? "ON" : "OFF");
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Trigger inhibit" << (enable ? "enabled" : "disabled");
         return true;
@@ -404,7 +445,7 @@ bool HP8114APulser::setTriggerInhibitMode(TriggerInhibitMode mode)
     QString modeStr;
     switch (mode) {
         case INHIBIT_RISE:
-            modeStr = "RISe";
+            modeStr = "RIS";
             break;
         case INHIBIT_FALL:
             modeStr = "FALL";
@@ -420,7 +461,7 @@ bool HP8114APulser::setTriggerInhibitMode(TriggerInhibitMode mode)
             return false;
     }
 
-    QString cmd = QString(":TRIGger:INHibit:MODE %1").arg(modeStr);
+    QString cmd = QString(":TRIG:INH:MODE %1").arg(modeStr);
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Trigger inhibit mode set to" << modeStr;
         return true;
@@ -430,7 +471,7 @@ bool HP8114APulser::setTriggerInhibitMode(TriggerInhibitMode mode)
 
 bool HP8114APulser::enableExternalWidth(bool enable)
 {
-    QString cmd = QString(":TRIGger:EWIDth:STATe %1").arg(enable ? "ON" : "OFF");
+    QString cmd = QString(":TRIG:EWID %1").arg(enable ? "ON" : "OFF");
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: External width mode" << (enable ? "enabled" : "disabled");
         return true;
@@ -444,7 +485,7 @@ bool HP8114APulser::enableExternalWidth(bool enable)
 
 bool HP8114APulser::enableOutput(bool enable)
 {
-    QString cmd = QString(":OUTPut:STATe %1").arg(enable ? "ON" : "OFF");
+    QString cmd = QString(":OUTP %1").arg(enable ? "ON" : "OFF");
     if (sendCommand(cmd)) {
         m_outputEnabled = enable;
         qDebug() << "HP8114A: Output" << (enable ? "enabled" : "disabled");
@@ -460,7 +501,7 @@ bool HP8114APulser::disableOutput()
 
 bool HP8114APulser::isOutputEnabled()
 {
-    QString response = queryCommand(":OUTPut:STATe?");
+    QString response = queryCommand(":OUTP?");
     if (response.isEmpty()) {
         return m_outputEnabled; // Return cached value on error
     }
@@ -471,7 +512,7 @@ bool HP8114APulser::isOutputEnabled()
 
 bool HP8114APulser::setInternalImpedance(double ohms)
 {
-    QString cmd = QString(":OUTPut:IMPedance:INTernal %1").arg(ohms, 0, 'E');
+    QString cmd = QString(":OUTP:IMP:INT %1OHM").arg(ohms);
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Internal impedance set to" << ohms << "Ω";
         return true;
@@ -481,7 +522,7 @@ bool HP8114APulser::setInternalImpedance(double ohms)
 
 bool HP8114APulser::setExternalImpedance(double ohms)
 {
-    QString cmd = QString(":OUTPut:IMPedance:EXTernal %1").arg(ohms, 0, 'E');
+    QString cmd = QString(":OUTP:IMP:EXT %1OHM").arg(ohms);
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: External impedance set to" << ohms << "Ω";
         return true;
@@ -491,8 +532,8 @@ bool HP8114APulser::setExternalImpedance(double ohms)
 
 bool HP8114APulser::setOutputPolarity(OutputPolarity polarity)
 {
-    QString polarityStr = (polarity == POLARITY_POSITIVE) ? "POSitive" : "NEGative";
-    QString cmd = QString(":OUTPut:POLarity %1").arg(polarityStr);
+    QString polarityStr = (polarity == POLARITY_POSITIVE) ? "POS" : "NEG";
+    QString cmd = QString(":OUTP:POL %1").arg(polarityStr);
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Output polarity set to" << polarityStr;
         return true;
@@ -506,7 +547,7 @@ bool HP8114APulser::setOutputPolarity(OutputPolarity polarity)
 
 double HP8114APulser::queryVoltageHigh()
 {
-    double value = queryDouble(":SOURce:VOLTage:HIGH?");
+    double value = queryDouble(":VOLT:HIGH?");
     if (value != 0.0) {
         m_voltageHigh = value;
     }
@@ -515,7 +556,7 @@ double HP8114APulser::queryVoltageHigh()
 
 double HP8114APulser::queryVoltageLow()
 {
-    double value = queryDouble(":SOURce:VOLTage:LOW?");
+    double value = queryDouble(":VOLT:LOW?");
     if (value != 0.0) {
         m_voltageLow = value;
     }
@@ -524,7 +565,7 @@ double HP8114APulser::queryVoltageLow()
 
 double HP8114APulser::queryVoltageAmplitude()
 {
-    double value = queryDouble(":SOURce:VOLTage:AMPLitude?");
+    double value = queryDouble(":VOLT?");
     if (value != 0.0) {
         m_voltageAmplitude = value;
     }
@@ -533,14 +574,14 @@ double HP8114APulser::queryVoltageAmplitude()
 
 double HP8114APulser::queryVoltageBaseline()
 {
-    double value = queryDouble(":SOURce:VOLTage:BASeline?");
+    double value = queryDouble(":VOLT:BAS?");
     m_voltageBaseline = value;
     return value;
 }
 
 double HP8114APulser::queryPulseWidth()
 {
-    double value = queryDouble(":SOURce:PULSe:WIDTh?");
+    double value = queryDouble(":PULS:WIDT?");
     if (value > 0.0) {
         m_pulseWidth = value;
     }
@@ -549,7 +590,7 @@ double HP8114APulser::queryPulseWidth()
 
 double HP8114APulser::queryPulsePeriod()
 {
-    double value = queryDouble(":SOURce:PULSe:PERiod?");
+    double value = queryDouble(":PULS:PER?");
     if (value > 0.0) {
         m_pulsePeriod = value;
         m_pulseFrequency = 1.0 / value;
@@ -559,7 +600,7 @@ double HP8114APulser::queryPulsePeriod()
 
 double HP8114APulser::queryPulseFrequency()
 {
-    double value = queryDouble(":SOURce:FREQuency?");
+    double value = queryDouble(":FREQ?");
     if (value > 0.0) {
         m_pulseFrequency = value;
         m_pulsePeriod = 1.0 / value;
@@ -569,12 +610,12 @@ double HP8114APulser::queryPulseFrequency()
 
 QString HP8114APulser::queryTriggerSource()
 {
-    return queryCommand(":TRIGger:SOURce?");
+    return queryCommand(":TRIG:SOUR?");
 }
 
 QString HP8114APulser::queryTriggerSlope()
 {
-    return queryCommand(":TRIGger:SLOPe?");
+    return queryCommand(":TRIG:SLOP?");
 }
 
 // ============================================================================
@@ -604,7 +645,7 @@ bool HP8114APulser::waitForOperationComplete(int timeout_ms)
 
 QString HP8114APulser::getSystemError()
 {
-    QString error = queryCommand(":SYSTem:ERRor?");
+    QString error = queryCommand(":SYST:ERR?");
     if (!error.isEmpty() && !error.startsWith("0,")) {
         qWarning() << "HP8114A System Error:" << error;
     }
@@ -678,7 +719,7 @@ bool HP8114APulser::recallSettings(int location)
 
 bool HP8114APulser::enableDisplay(bool enable)
 {
-    QString cmd = QString(":DISPlay:WINDow:STATe %1").arg(enable ? "ON" : "OFF");
+    QString cmd = QString(":DISP %1").arg(enable ? "ON" : "OFF");
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Display" << (enable ? "enabled" : "disabled");
         return true;
@@ -710,7 +751,7 @@ bool HP8114APulser::performSelfTest()
 
 bool HP8114APulser::enableDoublePulse(bool enable)
 {
-    QString cmd = QString(":SOURce:PULSe:DOUBle:STATe %1").arg(enable ? "ON" : "OFF");
+    QString cmd = QString(":PULS:DOUB:STAT %1").arg(enable ? "ON" : "OFF");
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Double pulse mode" << (enable ? "enabled" : "disabled");
         return true;
@@ -725,9 +766,10 @@ bool HP8114APulser::setDoublePulseDelay(double delay_sec)
         return false;
     }
 
-    QString cmd = QString(":SOURce:PULSe:DOUBle:DELay %1").arg(delay_sec, 0, 'E');
+    double delay_ns = delay_sec * 1e9;
+    QString cmd = QString(":PULS:DOUB:DEL %1NS").arg(delay_ns);
     if (sendCommand(cmd)) {
-        qDebug() << "HP8114A: Double pulse delay set to" << (delay_sec * 1e6) << "us";
+        qDebug() << "HP8114A: Double pulse delay set to" << delay_ns << "ns";
         return true;
     }
     return false;
@@ -740,7 +782,7 @@ bool HP8114APulser::setDoublePulseDelay(double delay_sec)
 bool HP8114APulser::setHoldMode(HoldMode mode)
 {
     QString modeStr = (mode == HOLD_VOLTAGE) ? "VOLT" : "CURR";
-    QString cmd = QString(":SOURce:HOLD %1").arg(modeStr);
+    QString cmd = QString(":HOLD %1").arg(modeStr);
 
     if (sendCommand(cmd)) {
         qDebug() << "HP8114A: Hold mode set to" << modeStr;
@@ -782,12 +824,17 @@ bool HP8114APulser::sendCommand(const QString& command)
         cmd += '\n';
     }
 
+    qDebug() << "HP8114A: Sending command:" << command;
     bool success = write(cmd);
     if (!success) {
         qWarning() << "HP8114A: Failed to send command:" << command;
+        return false;
     }
 
-    return success;
+    // Give device time to process the command
+    QThread::msleep(50);
+
+    return true;
 }
 
 QString HP8114APulser::queryCommand(const QString& query)

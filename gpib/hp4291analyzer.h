@@ -13,6 +13,7 @@ public:
     // HP 4291A specific measurement setup
     bool setupForMeasurement(double frequency);
     bool setupTrigger(bool external = false);
+    bool disableMathFunctions();
 
     // Measurement format options
     enum MeasurementFormat {

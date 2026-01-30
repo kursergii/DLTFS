@@ -36,19 +36,65 @@ bool HP4291Analyzer::setupForMeasurement(double frequency)
 
 bool HP4291Analyzer::setupTrigger(bool external)
 {
-    QString trigSource = external ? "EXT" : "BUS";
-    QString cmd = QString("TRIG:SOUR %1\n").arg(trigSource);
+    if (external) {
+        // Enable status register for external trigger (matches raw code line 102)
+        if (!write("STAT:INST:ENAB 128\n")) {
+            qWarning() << "HP4291A: Failed to enable status register";
+            return false;
+        }
 
-    if (!write(cmd)) {
+        // Service request enable (matches raw code line 103)
+        if (!write("*SRE 4\n")) {
+            qWarning() << "HP4291A: Failed to set service request";
+            return false;
+        }
+
+        // Set trigger source to external (matches raw code line 104)
+        if (!write("TRIG:SOUR EXT\n")) {
+            qWarning() << "HP4291A: Failed to set external trigger source";
+            return false;
+        }
+
+        // Enable continuous initiation (matches raw code line 105)
+        if (!write("INIT:CONT ON\n")) {
+            qWarning() << "HP4291A: Failed to enable continuous init";
+            return false;
+        }
+
+        // Set trigger event type to POINT (matches raw code line 106)
+        if (!write("TRIG:EVEN:TYPE POIN\n")) {
+            qWarning() << "HP4291A: Failed to set trigger event type";
+            return false;
+        }
+
+        qDebug() << "HP 4291A trigger configured: EXTERNAL with POINT event type";
+    } else {
+        // Bus trigger mode (simpler setup)
+        if (!write("TRIG:SOUR BUS\n")) {
+            return false;
+        }
+
+        if (!write("INIT:CONT ON\n")) {
+            return false;
+        }
+
+        qDebug() << "HP 4291A trigger configured: BUS";
+    }
+
+    return true;
+}
+
+bool HP4291Analyzer::disableMathFunctions()
+{
+    // Turn off math functions to get raw measurement data
+    // This is important for DLTFS - we want direct capacitance readings
+    // without any post-processing, smoothing, or averaging
+    if (!write("CALC:MATH:STAT OFF\n")) {
+        qDebug() << "Failed to disable math functions";
         return false;
     }
 
-    // Enable continuous initiation
-    if (!write("INIT:CONT ON\n")) {
-        return false;
-    }
-
-    qDebug() << "HP 4291A trigger configured:" << (external ? "EXTERNAL" : "BUS");
+    qDebug() << "HP 4291A math functions disabled";
     return true;
 }
 

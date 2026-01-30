@@ -14,7 +14,7 @@ const int GPIB_BOARD = 0;
 const int GPIB_ADDRESS = 17;
 
 // Constants
-const double TINT = 0.5;      // INTERVAL TIME (SEC)
+const double TINT = 0.01;      // INTERVAL TIME (SEC)
 const int NOP = 201;          // SAMPLE POINTS
 const double F = 1.0E8;       // MEASUREMENT FREQ. 100MHZ
 
@@ -61,6 +61,9 @@ public:
     void write(const std::string& command) {
         if (gpibDevice < 0) return;
 
+        // Print command being sent
+        std::cout << "Write: " << command << std::endl;
+
         ibwrt(gpibDevice, (void*)command.c_str(), command.length());
 
         if (ibsta & ERR) {
@@ -69,7 +72,17 @@ public:
     }
 
     bool query(const std::string& command) {
-        write(command);
+        // Don't call write() - do direct GPIB write to avoid double output
+        if (gpibDevice < 0) return false;
+
+        std::cout << "Query: " << command << std::endl;
+
+        ibwrt(gpibDevice, (void*)command.c_str(), command.length());
+
+        if (ibsta & ERR) {
+            std::cerr << "Error writing query: " << command << std::endl;
+            return false;
+        }
 
         std::memset(buffer, 0, BUFFER_SIZE);
         ibrd(gpibDevice, buffer, BUFFER_SIZE - 1);
@@ -81,6 +94,10 @@ public:
 
         // Null-terminate the buffer
         buffer[ibcnt] = '\0';
+
+        // Print response to terminal
+        std::cout << "  Response: " << buffer << std::endl;
+
         return true;
     }
 
@@ -101,11 +118,11 @@ public:
     void setupTrigger() {
         write("STAT:INST:ENAB 128");
         write("*SRE 4");
-        write("TRIG:SOUR EXT");
+        write("TRIG:SOUR BUS");
         write("INIT:CONT ON;");
         write("TRIG:EVEN:TYPE POIN");
 
-        std::cout << "Trigger configuration complete (external trigger)" << std::endl;
+        std::cout << "Trigger configuration complete (BUS trigger)" << std::endl;
     }
 
     void collectMeasurements(std::vector<double>& x_data, std::vector<double>& y_data) {
@@ -119,30 +136,29 @@ public:
         auto t1 = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < NOP; ++i) {
-            // Clear and prepare for next measurement
-            write("*CLS");
+            // Clear status and query operation complete (matches HP BASIC line 430)
+            query("*CLS;*OPC?");
 
-            // Arm the instrument for external trigger
-            write("INIT");
+            // Send BUS trigger (matches HP BASIC line 460: TRIGGER @Hp4291)
+            write("*TRG");
 
-            // Wait for external trigger event
-            write("*OPC?");
-            query("");  // Read response
+            // Small delay to allow trigger to complete
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-            // Read measurement value
+            // Read measurement value (matches HP BASIC line 490)
             char cmd[256];
             std::sprintf(cmd, "TRAC:VAL? DTR,%d", i + 1);
             if (query(cmd)) {
                 y_data[i] = std::atof(buffer);
             }
 
-            // Display progress
+            // Display progress (matches HP BASIC line 510)
             double elapsed_time = i * TINT;
             std::cout << "Point " << std::setw(3) << (i + 1) << "/" << NOP
                       << ": " << std::fixed << std::setprecision(1) << elapsed_time
                       << " [SEC]\r" << std::flush;
 
-            // Maintain timing interval
+            // Maintain timing interval (matches HP BASIC lines 520-550)
             auto t2 = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<double>(t2 - t1).count();
 
@@ -243,17 +259,17 @@ int main() {
 
     controller.collectMeasurements(x_data, y_data);
 
-    // Setup and send display configuration
-    controller.setupDisplay(x_data, y_data);
+    // // Setup and send display configuration
+    // controller.setupDisplay(x_data, y_data);
 
-    // Wait for user interaction
-    std::cout << "\nMove marker or press [RETURN] to clear trace: ";
-    std::cin.ignore();
+    // // Wait for user interaction
+    // std::cout << "\nMove marker or press [RETURN] to clear trace: ";
+    // std::cin.ignore();
 
-    // Clear the trace
+    // // Clear the trace
     controller.clearTrace();
 
-    std::cout << "Program complete" << std::endl;
+    // std::cout << "Program complete" << std::endl;
 
     return 0;
 }

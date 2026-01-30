@@ -1,13 +1,20 @@
 #include "measurements.h"
 #include <QTimer>
 #include <QEventLoop>
+#include <QElapsedTimer>
 
 void Measurements::running() {
     // Placeholder for the main loop logic 
     waiter(1000);
     qDebug() << "Measurements running...";
     if (isMeasuring) {
-        // Measurement logic would go here
+        doMeasurement();
+        emit isDone(true);
+        isMeasuring = false;
+    }
+    else if (isReadyForInitialMeasurement) {
+        applyPulseSettings();
+        isReadyForInitialMeasurement = false;
     }
 
 }
@@ -22,33 +29,85 @@ void Measurements::waiter(int time) {
     loop.exec();
 }
 
-void Measurements::connectPulser() {
+bool Measurements::connectPulser() {
     // Connect to pulser (GPIB address 14)
-    if (pulser->connect()) {
-        // Initialize the pulser (includes reset and configuration)
-        if (pulser->initialize()) {
-            QString pulserID = pulser->getIdentification();
-            qDebug() << "Pulser ID:" << pulserID;
-            qDebug() << "Pulser initialized successfully";
-        } else {
-            qDebug() << "Failed to initialize pulser";
-        }
-    } else {
+    if (!pulser->connect()) {
         qDebug() << "Failed to connect to pulser:" << pulser->getLastError();
+        return false;
+    }   
+    
+    QString pulserID = pulser->getIdentification();
+    qDebug() << "Pulser ID:" << pulserID;
+    qDebug() << "Pulser initialized successfully";
+
+    // Initialize the pulser (includes reset and configuration)
+    if (!pulser->initialize()) {
+        qDebug() << "Failed to initialize pulser";
+        return false;
     }
+
+    return true;
 }
 
-void Measurements::connectAnalyzer() {
-    // Connect to HP 4291A RF Impedance Analyzer (GPIB address 17)
-    if (analyzer->connect()) {
-        QString analyzerID = analyzer->queryIdentification();
-        qDebug() << "Analyzer ID:" << analyzerID;
-    } else {
-        qDebug() << "Failed to connect to analyzer:" << analyzer->getLastError();
+bool Measurements::connectAnalyzer() {
+    // Step 1: Establish GPIB connection to HP 4291A Impedance Analyzer (address 17)
+    if (!analyzer->connect()) {
+        qWarning() << "HP4291A: Failed to connect -" << analyzer->getLastError();
+        return false;
     }
+    qDebug() << "HP4291A: GPIB connection established";
+
+    // Step 2: Verify device identification
+    QString analyzerID = analyzer->queryIdentification();
+    if (analyzerID.isEmpty()) {
+        qWarning() << "HP4291A: Failed to query device identification";
+        return false;
+    }
+    qDebug() << "HP4291A: Device ID:" << analyzerID;
+
+    if (!analyzer->write("*CLS\n")) {
+        qWarning() << "HP4291A: Failed to clear status at point";
+        return false;
+    }
+
+    // Step 3: Setup measurement frequency (10 MHz for DLTFS)
+    double initialFrequency = 1000e6;  // 1000 MHz
+    if (!analyzer->setupForMeasurement(initialFrequency)) {
+        qWarning() << "HP4291A: Failed to setup measurement frequency";
+        return false;
+    }
+    qDebug() << "HP4291A: Measurement frequency set to" << (initialFrequency / 1e6) << "MHz";
+
+    // Step 4: Disable math functions for raw capacitance data
+    if (!analyzer->disableMathFunctions()) {
+        qWarning() << "HP4291A: Failed to disable math functions";
+        return false;
+    }
+    qDebug() << "HP4291A: Math functions disabled - raw data mode";
+
+    // Step 5: Set measurement format to CP (Capacitance parallel + Dissipation factor)
+    if (!analyzer->setMeasurementFormat(HP4291Analyzer::CP)) {
+        qWarning() << "HP4291A: Failed to set measurement format to CP";
+        return false;
+    }
+    qDebug() << "HP4291A: Measurement format set to CP (Capacitance-Dissipation)";
+
+    // Step 6: Configure BUS trigger mode (software trigger via GPIB)
+    if (!analyzer->setupTrigger(false)) {
+        qWarning() << "HP4291A: Failed to setup BUS trigger";
+        return false;
+    }
+    
+    if (!analyzer->write("DISP:TRAC18:CLE\n")) {
+        qWarning() << "HP4291A: Failed to clear status for batch";
+    }
+    qDebug() << "HP4291A: BUS trigger mode enabled";
+
+    qDebug() << "HP4291A: Initialization complete - ready for measurements";
+    return true;
 }
 
-void Measurements::connectArduino() {
+bool Measurements::connectArduino() {
     // Connect Arduino for triggering
     serialPort->setPortName("/dev/ttyUSB0");  // Default port, should be configurable
     serialPort->setBaudRate(QSerialPort::Baud9600);
@@ -57,15 +116,17 @@ void Measurements::connectArduino() {
     serialPort->setStopBits(QSerialPort::OneStop);
     serialPort->setFlowControl(QSerialPort::NoFlowControl);
 
-    if (serialPort->open(QIODevice::ReadWrite)) {
-        qDebug() << "Arduino connected";
-    } else {
+    if (!serialPort->open(QIODevice::ReadWrite)) {
         qDebug() << "Failed to connect to Arduino:" << serialPort->errorString();
+        return false;
     }
+
+    qDebug() << "Arduino connected";
+    return true;
 }
 
 void Measurements::updatePulseParams(double offset, double amplitude, double duration) {
-    pulseOffset = offset;
+    pulseOffset = offset = 0;
     pulseAmplitude = amplitude;
     pulseDuration = duration;
     qDebug() << "Pulse params updated: Offset=" << offset << "V, Amplitude=" << amplitude << "V, Duration=" << duration << "us";
@@ -73,6 +134,29 @@ void Measurements::updatePulseParams(double offset, double amplitude, double dur
     // If devices are connected, apply the new settings
     if (pulser && pulser->isConnected()) {
         applyPulseSettings();
+    }
+}
+
+void Measurements::updateMeasurementParams(int numPoints, double integrationTime) {
+    totalPoints = numPoints;
+    tint = integrationTime;
+    qDebug() << "Measurement params updated: Points=" << numPoints << ", Integration time=" << integrationTime << "s";
+}
+
+void Measurements::updateAnalyzerFrequency(double frequencyMHz) {
+    if (!analyzer || !analyzer->isConnected()) {
+        qDebug() << "Cannot update analyzer frequency: Analyzer not connected";
+        return;
+    }
+
+    // Convert MHz to Hz
+    double frequencyHz = frequencyMHz * 1e6;
+
+    // Update analyzer frequency
+    if (analyzer->setupForMeasurement(frequencyHz)) {
+        qDebug() << "Analyzer frequency updated to" << frequencyMHz << "MHz";
+    } else {
+        qWarning() << "Failed to update analyzer frequency to" << frequencyMHz << "MHz";
     }
 }
 
@@ -88,17 +172,17 @@ void Measurements::applyPulseSettings() {
     double widthSeconds = pulseDuration * 1e-6;  // Convert microseconds to seconds
 
     // Use the proper HP8114APulser API methods
-    if (pulser->setVoltageHigh(highLevel)) {
-        qDebug() << "Set pulse high level to" << highLevel << "V";
+    if (pulser->setVoltageAmplitude(pulseAmplitude)) {
+        qDebug() << "Set pulse Amplitude to" << pulseAmplitude << "V";
     } else {
         qDebug() << "Failed to set pulse high level";
     }
 
-    if (pulser->setVoltageLow(lowLevel)) {
-        qDebug() << "Set pulse low level (offset) to" << lowLevel << "V";
-    } else {
-        qDebug() << "Failed to set pulse low level";
-    }
+    // if (pulser->setVoltageLow(lowLevel)) {
+    //     qDebug() << "Set pulse low level (offset) to" << lowLevel << "V";
+    // } else {
+    //     qDebug() << "Failed to set pulse low level";
+    // }
 
     if (pulser->setPulseWidth(widthSeconds)) {
         qDebug() << "Set pulse width to" << pulseDuration << "us";
@@ -106,28 +190,6 @@ void Measurements::applyPulseSettings() {
         qDebug() << "Failed to set pulse width";
     }
 }
-
-
-    // // Create GPIB device instances with specialized classes
-    // pulser = new HP8114APulser(0, 14);    // HP8114A Pulser at address 14
-    // analyzer = new HP4291Analyzer(0, 17); // HP4291A Analyzer at address 17
-
-    // // Create serial port instance
-    // serialPort = new QSerialPort();
-
-    // // Create GPIB polling timer (poll every 100ms)
-    // gpibPollTimer = new QTimer(this);
-    // gpibPollTimer->setInterval(100);
-
-    // // Connect GPIB polling timer to check for asynchronous data
-    // QObject::connect(gpibPollTimer, &QTimer::timeout, this, &MW::onPulserDataReceived);
-    // QObject::connect(gpibPollTimer, &QTimer::timeout, this, &MW::onAnalyzerDataReceived);
-
-
-// void Measurements::stopMeasurement()
-// {
-//     m_shouldStop = true;
-// }
 
 // bool Measurements::setUpAnalyzerForMeasurement()
 // {
@@ -165,289 +227,207 @@ void Measurements::applyPulseSettings() {
 //     return true;
 // }
 
-// void Measurements::run()
-// {
-//     qDebug() << "Measurements thread: Starting measurement...";
 
-//     // Calculate how many measurement batches we need
-//     int numBatches = (m_totalPoints + m_maxPointsPerMeas - 1) / m_maxPointsPerMeas;
+void Measurements::doMeasurement()
+{
+    qDebug() << "HP4291A: Starting DLTFS measurement sequence...";
+    qDebug() << "Parameters: Points=" << totalPoints << ", Integration time=" << tint << "s";
 
-//     // Arrays to store all measurement data
-//     QVector<double> xData(m_totalPoints);   // Time data (actual elapsed time)
-//     QVector<double> yData(m_totalPoints);   // Capacitance data
+    if (!analyzer || !analyzer->isConnected()) {
+        qWarning() << "HP4291A: Analyzer not connected, cannot start measurement";
+        return;
+    }
 
-//     // Send trigger to Arduino (triggers one pulse)
-//     m_serialPort->write("TRIG 100\n");
+    if (!pulser || !pulser->isConnected()) {
+        qWarning() << "HP8114A: Pulser not connected, cannot start measurement";
+        return;
+    }
+    
+    if (!analyzer->write("DISP:TRAC18:CLE\n")) {
+        qWarning() << "HP4291A: Failed to clear status for batch";
+    }
+    // Small delay to allow Arduino to process trigger
+    QThread::msleep(100);
 
-//     // Start timing - this is the reference point (t=0)
-//     QElapsedTimer timer;
-//     timer.start();
+        // Clear and reset trace buffer
+    if (!analyzer->write("*CLS\n")) {
+        qWarning() << "HP4291A: Failed to clear status for batch";
+    }
 
-//     // Pre-allocate buffer for command strings to avoid repeated allocations
-//     char cmdBuffer[32];
+    // // Small delay to ensure pulse completes
+    // QThread::msleep(50);
 
-//     // Loop through all measurement batches
-//     for (int batch = 0; batch < numBatches; ++batch) {
-//         if (m_shouldStop) {
-//             emit measurementError("Measurement stopped by user");
-//             return;
-//         }
+    // HP4291A has a 201 point buffer limit
+    const int ANALYZER_MAX_POINTS = 201;
 
-//         // Calculate how many points to collect in this batch
-//         int startIndex = batch * m_maxPointsPerMeas;
-//         int remainingPoints = m_totalPoints - startIndex;
-//         int batchSize = (remainingPoints < m_maxPointsPerMeas) ? remainingPoints : m_maxPointsPerMeas;
+    // Calculate number of batches needed
+    int numBatches = (totalPoints + ANALYZER_MAX_POINTS - 1) / ANALYZER_MAX_POINTS;
+    qDebug() << "HP4291A: Total batches required:" << numBatches;
 
-//         qDebug() << QString("Measurements thread: Starting batch %1/%2 (%3 points)")
-//                     .arg(batch + 1)
-//                     .arg(numBatches)
-//                     .arg(batchSize);
+    // Arrays to store all measurement data
+    QList<double> xData;
+    QList<double> yData;
+    xData.reserve(totalPoints);
+    yData.reserve(totalPoints);
 
-//         // If not the first batch, reconfigure analyzer
-//         if (batch > 0) {
-//             if (!setUpAnalyzerForMeasurement()) {
-//                 emit measurementError("Failed to reconfigure analyzer for batch " + QString::number(batch + 1));
-//                 return;
-//             }
-//         }
+    // Start timing - this is the reference point (t=0)
+    QElapsedTimer globalTimer;  // For recording absolute time
+    globalTimer.start();
 
-//         // Collect measurements for this batch
-//         for (int i = 0; i < batchSize; ++i) {
-//             if (m_shouldStop) {
-//                 emit measurementError("Measurement stopped by user");
-//                 return;
-//             }
+    QElapsedTimer intervalTimer;  // For maintaining TINT intervals (matches raw code)
+    intervalTimer.start();
 
-//             int globalIndex = startIndex + i;  // Index in the full data arrays
+        // // Send one initial pulse from pulser before starting measurements
+    qDebug() << "HP8114A: Triggering initial pulse...";
+    if (!pulser->trigger()) {
+        qWarning() << "HP8114A: Failed to trigger initial pulse";
+        return;
+    }
+    qDebug() << "HP8114A: Initial pulse triggered successfully";
+    
+    bool pulseTrigger = true;
+    // Process measurements in batches
+    for (int batch = 0; batch < numBatches; ++batch) {
+        // Calculate batch parameters
+        int batchStartPoint = batch * ANALYZER_MAX_POINTS;
+        int pointsInBatch = qMin(ANALYZER_MAX_POINTS, totalPoints - batchStartPoint);
 
-//             // Combine commands to reduce GPIB transactions
-//             // Send: clear, trigger, and wait for completion in one sequence
-//             m_analyzer->write("*CLS;*TRG;*OPC?\n");
-//             m_analyzer->read();  // Read OPC response (blocks until measurement complete)
+        qDebug() << QString("HP4291A: Starting batch %1/%2 (points %3-%4)")
+                    .arg(batch + 1)
+                    .arg(numBatches)
+                    .arg(batchStartPoint + 1)
+                    .arg(batchStartPoint + pointsInBatch);
 
-//             // Read measurement value (returns Cp,D)
-//             // Use snprintf for faster string formatting
-//             // Note: analyzer's internal point numbering starts at 1
-//             snprintf(cmdBuffer, sizeof(cmdBuffer), "TRAC:VAL? DTR,%d\n", i + 1);
+        // Reset analyzer for new batch (except first batch - already configured)
+        if (batch > 0) {
+            qDebug() << "HP4291A: Resetting analyzer for new batch...";
 
-//             if (m_analyzer->write(cmdBuffer)) {
-//                 QString response = m_analyzer->read(1024);
-//                 if (!response.isEmpty()) {
-//                     // Fast parse: find first comma, convert substring before it
-//                     int commaPos = response.indexOf(',');
-//                     if (commaPos > 0) {
-//                         bool ok;
-//                         yData[globalIndex] = response.left(commaPos).toDouble(&ok);
-//                         if (!ok) {
-//                             yData[globalIndex] = 0.0;
-//                         }
-//                     } else {
-//                         // No comma, try converting whole string
-//                         bool ok;
-//                         yData[globalIndex] = response.trimmed().toDouble(&ok);
-//                         if (!ok) {
-//                             yData[globalIndex] = 0.0;
-//                         }
-//                     }
-//                 } else {
-//                     yData[globalIndex] = 0.0;
-//                 }
-//             } else {
-//                 yData[globalIndex] = 0.0;
-//             }
+            // Clear and reset trace buffer
+            if (!analyzer->write("*CLS\n")) {
+                qWarning() << "HP4291A: Failed to clear status for batch" << batch;
+            }
 
-//             // Capture actual elapsed time in seconds
-//             double elapsedTime = timer.elapsed() / 1000.0;  // Convert ms to seconds
-//             xData[globalIndex] = elapsedTime;
+            // Small delay to ensure analyzer is ready
+            // QThread::msleep(100);
 
-//             // Emit progress update
-//             emit progressUpdate(globalIndex + 1, m_totalPoints, elapsedTime, yData[globalIndex]);
+            // Restart interval timer after batch reset delay
+            intervalTimer.restart();
+        }
 
-//             // Maintain timing interval (wait until TINT seconds have passed)
-//             qint64 targetTime = static_cast<qint64>(globalIndex * m_tint * 1000);  // Target time in ms
-//             qint64 currentTime = timer.elapsed();
-//             qint64 remainingTime = targetTime + static_cast<qint64>(m_tint * 1000) - currentTime;
+        // Collect points for this batch
+        for (int i = 0; i < pointsInBatch; ++i) {
+            int globalIndex = batchStartPoint + i;
+            int batchLocalIndex = i + 1;  // Analyzer point numbering is 1-based
 
-//             if (remainingTime > 0) {
-//                 QThread::msleep(remainingTime);
-//             }
-//         }
-//     }
+            // Check for thread interruption
+            if (isInterruptionRequested()) {
+                qWarning() << "HP4291A: Measurement stopped by user at point" << globalIndex;
+                return;
+            }
 
-//     qDebug() << "Measurements thread: Measurement complete";
-//     emit measurementComplete(xData, yData);
-// }
+            // Clear status and query operation complete (matches HP BASIC line 430)
+            if (!analyzer->write("*CLS;*OPC?\n")) {
+                qWarning() << "HP4291A: Failed to clear status at point" << globalIndex;
+                continue;
+            }
+            analyzer->read();  // Read OPC response
 
+            // Send BUS trigger (matches HP BASIC line 460: TRIGGER @Hp4291)
+            if (!analyzer->write("*TRG\n")) {
+                qWarning() << "HP4291A: Failed to send trigger at point" << globalIndex;
+                continue;
+            }
 
-// void MW::connectPulser() {
+            // Trigger pulse from pulser
+            if (pulseTrigger) {
+                if (!pulser->trigger()) {
+                    qWarning() << "HP8114A: Failed to trigger pulse at point" << globalIndex;
+                }
+                    // Send trigger command to Arduino
+            if (serialPort && serialPort->isOpen()) {
+                qDebug() << "Arduino: Sending trigger command 'TRIG 100'";
+                qint64 bytesWritten = serialPort->write("TRIG 100\n");
+                if (bytesWritten == -1) {
+                    qWarning() << "Arduino: Failed to send trigger command";
+                } else {
+                    serialPort->flush();  // Ensure data is sent immediately
+                    qDebug() << "Arduino: Trigger command sent successfully";
+                }
+            } else {
+                qWarning() << "Arduino: Serial port not available";
+            }
+                pulseTrigger = false;
+            }
 
-//     // Connect to pulser (GPIB address 14)
-//     if (pulser->connect()) {
-//         QString pulserID = pulser->queryIdentification();
-//         qDebug() << "Pulser ID:" << pulserID;
-//     } else {
-//         qDebug() << "Failed to connect to pulser:" << pulser->getLastError();
-//     }
+            // Small delay to allow trigger to complete
+            // QThread::msleep(100);
 
-//     if (pulser->setExternalTrigger()) {
-//         qDebug() << "HP8114A configured for external trigger from Arduino";
-//     } else {
-//         qDebug() << "Failed to configure HP8114A for external trigger:" << pulser->getLastError();
-//     }
+            // Read measurement value - use batch-local index for TRAC:VAL command
+            QString cmd = QString("TRAC:VAL? DTR,%1\n").arg(batchLocalIndex);
+            if (analyzer->write(cmd)) {
+                QString response = analyzer->read(1024);
+                if (!response.isEmpty()) {
+                    // Parse Cp value (first value before comma)
+                    int commaPos = response.indexOf(',');
+                    if (commaPos > 0) {
+                        bool ok;
+                        double capacitance = response.left(commaPos).toDouble(&ok);
+                        if (ok) {
+                            yData.append(capacitance);
+                        } else {
+                            yData.append(0.0);
+                            qWarning() << "HP4291A: Failed to parse capacitance at point" << globalIndex;
+                        }
+                    } else {
+                        // No comma, try converting whole response
+                        bool ok;
+                        double capacitance = response.trimmed().toDouble(&ok);
+                        yData.append(ok ? capacitance : 0.0);
+                    }
+                } else {
+                    yData.append(0.0);
+                    qWarning() << "HP4291A: Empty response at point" << globalIndex;
+                }
+            } else {
+                yData.append(0.0);
+                qWarning() << "HP4291A: Failed to write command at point" << globalIndex;
+            }
 
-//     // Set pulse period to 0.5 second
-//     if (pulser->write(":PULS:PER 0.5\n")) {
-//         qDebug() << "Pulse period set to 0.5 second";
-//     } else {
-//         qDebug() << "Failed to set pulse period:" << pulser->getLastError();
-//     }
+            // Capture actual elapsed time in seconds (from global start)
+            double elapsedTime = globalTimer.elapsed() / 1000.0;
+            xData.append(elapsedTime);
 
-//     // Use default values (TODO: add UI inputs back)
-//     double ampl = 5.0;  // 5V amplitude
-//     double duri = 100e-6;  // 100 microseconds
+            // Emit progress update with data
+            emit sendData(xData.last(), yData.last());
 
-//     QString inst = ":VOLT " + QString::number(ampl) + "V\nPULSe:WIDTh " + QString::number(duri) + "\nOUTPut ON\n";
+            // Display progress every 10 points or at batch boundaries
+            if ((globalIndex + 1) % 10 == 0 || (i + 1) == pointsInBatch) {
+                qDebug() << QString("HP4291A: Point %1/%2 (batch %3/%4): %5s, Cp=%6F")
+                            .arg(globalIndex + 1)
+                            .arg(totalPoints)
+                            .arg(batch + 1)
+                            .arg(numBatches)
+                            .arg(elapsedTime, 0, 'f', 1)
+                            .arg(yData.last(), 0, 'E', 3);
+            }
 
-//     if (pulser->write(inst)){
-//         qDebug() << "HP8114A configured for pulse";
-//     }
-//     else {
-//         qDebug() << "HP8114A not configured for pulse";
-//     }
+            // Maintain timing interval (matches raw code logic - wait for TINT since last point)
+            qint64 elapsedSinceLastPoint = intervalTimer.elapsed();
+            qint64 targetInterval = static_cast<qint64>(tint * 1000);  // TINT in milliseconds
+            qint64 remainingTime = targetInterval - elapsedSinceLastPoint;
 
-// }
+            if (remainingTime > 0) {
+                QThread::msleep(remainingTime);
+            }
 
-// void MW::connectAnalyzer() {
+            // Restart interval timer for next point (matches raw code t1 = t2)
+            intervalTimer.restart();
+        }
 
-//     // Connect to HP 4291A RF Impedance Analyzer (GPIB address 17)
-//     // Frequency range: 1 MHz to 1.8 GHz
-//     if (analyzer->connect()) {
-//         QString analyzerID = analyzer->queryIdentification();
-//         qDebug() << "Analyzer ID:" << analyzerID;
-//     } else {
-//         qDebug() << "Failed to connect to analyzer:" << analyzer->getLastError();
-//     }
+        qDebug() << QString("HP4291A: Batch %1/%2 complete").arg(batch + 1).arg(numBatches);
+    }
 
-// }
-
-// void MW::connectArduino() {
-
-//     // Connect Arduino for TRIGering
-
-//     if (serialPort->isOpen()) {
-//         serialPort->close();
-//         qDebug() << "Arduino disconnected";
-//         return;
-//     }
-
-//     QString portName = ui->arduinoPortCombo->currentText();
-//     if (portName.isEmpty()) {
-//         qDebug() << "Error: No Arduino port selected!";
-//         return;
-//     }
-
-//     serialPort->setPortName(portName);
-//     serialPort->setBaudRate(QSerialPort::Baud9600);
-//     serialPort->setDataBits(QSerialPort::Data8);
-//     serialPort->setParity(QSerialPort::NoParity);
-//     serialPort->setStopBits(QSerialPort::OneStop);
-//     serialPort->setFlowControl(QSerialPort::NoFlowControl);
-
-//     if (serialPort->open(QIODevice::ReadWrite)) {
-//         qDebug() << "Arduino connected on" << portName;
-//     } else {
-//         qDebug() << "Failed to connect to Arduino:" << serialPort->errorString();
-//     }
-
-
-// }
-
-// bool MW::setUpAnalyzerForMeasurement() {
-//     // Configure HP 4291A for impedance measurement at 100 MHz
-//     // Using specialized HP4291Analyzer methods
-//     qDebug() << "Configuring HP 4291A for impedance measurement at 100 MHz...";
-
-//     // Setup measurement at 100 MHz
-//     if (!analyzer->setupForMeasurement(100e6)) {
-//         qDebug() << "Failed to setup measurement:" << analyzer->getLastError();
-//         return false;
-//     }
-
-//     // Set measurement format to Cp-D (capacitance parallel and dissipation factor)
-//     if (!analyzer->setMeasurementFormat(HP4291Analyzer::CP)) {
-//         qDebug() << "Failed to set measurement format:" << analyzer->getLastError();
-//         return false;
-//     }
-
-//     // Configure trigger source to GPIB bus (not external)
-//     if (!analyzer->setupTrigger(false)) {
-//         qDebug() << "Failed to configure trigger:" << analyzer->getLastError();
-//         return false;
-//     }
-
-//     qDebug() << "HP 4291A configured for 100 MHz impedance measurement (Cp format)";
-//     return true;
-// }
-
-// void MW::onMeasurementProgress(int currentPoint, int totalPoints, double time, double capacitance)
-// {
-//     // Display progress (runs in main thread, so UI updates are safe)
-//     qDebug() << QString("Point %1/%2: %3 [SEC] - Cp: %4 pF")
-//                 .arg(currentPoint, 3)
-//                 .arg(totalPoints)
-//                 .arg(time, 7, 'f', 2)
-//                 .arg(capacitance * 1e12, 0, 'E', 6);
-// }
-
-// void MW::onMeasurementComplete(QVector<double> xData, QVector<double> yData)
-// {
-//     qDebug() << "\n=== Measurement complete (received in main thread) ===";
-//     qDebug() << "Time data (first 5 points):" << xData[0] << xData[1] << xData[2] << xData[3] << xData[4];
-//     qDebug() << "Capacitance data (first 5 points, pF):"
-//              << yData[0]*1e12 << yData[1]*1e12 << yData[2]*1e12 << yData[3]*1e12 << yData[4]*1e12;
-
-//     // Display last 5 points (works for any size)
-//     int lastIdx = xData.size() - 1;
-//     if (lastIdx >= 4) {
-//         qDebug() << "Time data (last 5 points):"
-//                  << xData[lastIdx-4] << xData[lastIdx-3] << xData[lastIdx-2] << xData[lastIdx-1] << xData[lastIdx];
-//         qDebug() << "Capacitance data (last 5 points, pF):"
-//                  << yData[lastIdx-4]*1e12 << yData[lastIdx-3]*1e12 << yData[lastIdx-2]*1e12
-//                  << yData[lastIdx-1]*1e12 << yData[lastIdx]*1e12;
-//     }
-
-//     // Update the plot with collected data (safe to call from main thread)
-//     updatePlot(xData, yData);
-// }
-
-// void MW::onMeasurementError(QString error)
-// {
-//     qDebug() << "Measurement error:" << error;
-// }
-
-// void MW::onSerialDataReceived()
-// {
-//     // Read available data from serial port
-//     QByteArray data = serialPort->readAll();
-//     serialBuffer.append(QString::fromUtf8(data));
-
-//     // Process complete lines (ending with \n or \r\n)
-//     while (serialBuffer.contains('\n')) {
-//         int newlinePos = serialBuffer.indexOf('\n');
-//         QString line = serialBuffer.left(newlinePos).trimmed();
-//         serialBuffer.remove(0, newlinePos + 1);
-
-//         if (!line.isEmpty()) {
-//             qDebug() << "Arduino message received:" << line;
-
-//             // Check for trigger command (software trigger mode)
-//             // Note: When HP8114A is in external trigger mode, it responds to
-//             // hardware trigger pulses directly. This software trigger is a fallback
-//             // or can be used for testing without hardware connections.
-//             if (line == "TRIG 1") {
-//                 qDebug() << "Software trigger command received! Initiating pulse...";
-//                 onStartButtonClicked();
-//             }
-//         }
-//     }
-// }
+    qDebug() << "HP4291A: Measurement collection complete";
+    qDebug() << "HP4291A: Total points collected:" << yData.size();
+    qDebug() << "HP4291A: Total time:" << (globalTimer.elapsed() / 1000.0) << "seconds";
+}
