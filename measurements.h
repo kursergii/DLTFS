@@ -4,8 +4,7 @@
 #include <QThread>
 #include <QDebug>
 #include "gpib/hp4291analyzer.h"
-#include "gpib/hp8114apulser.h"
-#include <QSerialPort>
+#include "gpib/keithley236smu.h"
 #include <cstdio>
 
 class Measurements : public QThread
@@ -16,17 +15,10 @@ class Measurements : public QThread
 
         bool allConnected = true;
 
-        // Create serial port instance
-        serialPort = new QSerialPort();
-        if (!connectArduino()) {
-            qWarning() << "Arduino connection failed";
-            allConnected = false;
-        }
-
-        // Create GPIB device instances with specialized classes
-        pulser = new HP8114APulser(0, 14);    // HP8114A Pulser at address 14
-        if (!connectPulser()) {
-            qWarning() << "HP8114A Pulser connection failed";
+        // Create Keithley 236 SMU instance (GPIB address 15)
+        smu = new Keithley236SMU(0, 15);
+        if (!connectSMU()) {
+            qWarning() << "Keithley 236 SMU connection failed";
             allConnected = false;
         }
 
@@ -54,22 +46,10 @@ class Measurements : public QThread
         qDebug() << "Measurements thread stopped";
     }
 
-//     void MW::onConnectButtonClicked()
-// {
-//     // Start GPIB polling timer if devices are connected
-//     if (pulser->isConnected() || analyzer->isConnected()) {
-//         gpibPollTimer->start();
-//         qDebug() << "Started GPIB polling timer (100ms interval)";
-//     }
-// }
-
 signals:
-    // void progressUpdate(int currentPoint, int totalPoints, double time, double capacitance);
-    // void measurementComplete(QList<double> xData, QList<double> yData);
-    // void measurementError(QString error);
     void connected(const bool& status);
     void resultsReceived();
-    void sendData(const double&, const double&);
+    void sendData(const double&, const double&, const double&, const double&);
     void isDone(const bool& done);
 
 public slots:
@@ -82,39 +62,37 @@ public slots:
         // Placeholder for receiving UI data if needed
     }
 
-    void updatePulseParams(double offset, double amplitude, double duration);
+    void updateBiasParams(double biasV, double zeroDurationMs);
     void updateMeasurementParams(int numPoints, double integrationTime);
     void updateAnalyzerFrequency(double frequencyMHz);
 
 private slots:
 
 private:
-    HP8114APulser *pulser;        // HP8114A Pulse Generator at GPIB address 14
+    Keithley236SMU *smu;          // Keithley 236 SMU at GPIB address 15
     HP4291Analyzer *analyzer;     // HP4291A Impedance Analyzer at GPIB address 17
-    QSerialPort *serialPort;      // Arduino
 
-    QString serialBuffer;
-    QString pulserBuffer;
+    QString smuBuffer;
     QString analyzerBuffer;
-    
+
     int totalPoints;
     int maxPointsPerMeas;
     double tint;
     bool isMeasuring = false;
     bool isReadyForInitialMeasurement = false;
+    bool isBiasUpdateRequested = false;
+    bool isFrequencyUpdateRequested = false;
+    double pendingFrequencyHz = 1000e6;
 
-    // Pulse parameters
-    double pulseOffset = 0.0;      // Default 0V offset
-    double pulseAmplitude = 1.0;   // Default 1V amplitude
-    double pulseDuration = 100.0;  // Default 100us duration
+    // Bias parameters
+    double biasVoltage = 1.0;      // Default 1V DC bias
+    double zeroDuration = 0.1;     // Default 100ms zero-bias duration (seconds)
 
-    // bool setUpAnalyzerForMeasurement();
-    bool connectPulser();
+    bool connectSMU();
     bool connectAnalyzer();
-    bool connectArduino();
     void running();
     void waiter(int time);
-    void applyPulseSettings();
+    void applyBiasSettings();
     void doMeasurement();
 };
 

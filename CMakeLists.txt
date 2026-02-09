@@ -9,7 +9,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets SerialPort PrintSupport)
+find_package(Qt6 REQUIRED COMPONENTS Widgets PrintSupport)
 
 set(PROJECT_SOURCES
     main.cpp
@@ -20,8 +20,8 @@ set(PROJECT_SOURCES
     gpib/gpibdevice.h
     gpib/hp4291analyzer.cpp
     gpib/hp4291analyzer.h
-    gpib/hp8114apulser.cpp
-    gpib/hp8114apulser.h
+    gpib/keithley236smu.cpp
+    gpib/keithley236smu.h
     qcustomplot/qcustomplot.cpp
     qcustomplot/qcustomplot.h
 )
@@ -34,7 +34,6 @@ target_include_directories(DLTFS PRIVATE ${CMAKE_SOURCE_DIR})
 
 target_link_libraries(DLTFS PRIVATE
     Qt6::Widgets
-    Qt6::SerialPort
     Qt6::PrintSupport
     gpib
 )

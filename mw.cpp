@@ -4,7 +4,6 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QApplication>
-#include <QSerialPortInfo>
 #include <QThread>
 #include <QElapsedTimer>
 #include <QList>
@@ -25,10 +24,11 @@ MW::MW(QWidget *parent)
     meas = new Measurements;
     ui->setupUi(this);
     customPlot = ui->customPlotWidget;
+    voltagePlot = ui->voltagePlotWidget;
 
     // Create Save Data button programmatically
     saveDataButton = new QPushButton("Save Data", this);
-    saveDataButton->setGeometry(10, 430, 221, 51);
+    saveDataButton->setGeometry(10, 470, 221, 51);
     QFont buttonFont;
     buttonFont.setPointSize(16);
     buttonFont.setBold(true);
@@ -46,6 +46,8 @@ MW::MW(QWidget *parent)
     setupPlot();
     xData.clear();
     yData.clear();
+    voltageData.clear();
+    currentData.clear();
     timeData.clear();
     measurementData.clear();
 
@@ -59,19 +61,6 @@ MW::MW(QWidget *parent)
 
 MW::~MW()
 {
-    // // Clean up measurement thread if running
-    // if (measurementThread && measurementThread->isRunning()) {
-    //     measurementThread->stopMeasurement();
-    //     measurementThread->wait();
-    // }
-    // delete measurementThread;
-
-    // if (serialPort && serialPort->isOpen()) {
-    //     serialPort->close();
-    // }
-    // delete pulser;
-    // delete analyzer;
-    // delete serialPort;
     delete ui;
 }
 
@@ -83,13 +72,11 @@ void MW::connectSignals()
     QObject::connect(saveDataButton, &QPushButton::clicked, this, &MW::onSaveDataButtonClicked);
     QObject::connect(ui->quitButton, &QPushButton::clicked, this, &MW::onQuitButtonClicked);
 
-    // Connect pulse parameter change signals
+    // Connect bias parameter change signals
     QObject::connect(ui->offsetDoubleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                     this, &MW::onOffsetChanged);
-    QObject::connect(ui->amplitudeDoubleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                     this, &MW::onAmplitudeChanged);
+                     this, &MW::onBiasChanged);
     QObject::connect(ui->durationSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
-                     this, &MW::onDurationChanged);
+                     this, &MW::onZeroDurationChanged);
 
     // Connect measurement parameter change signals
     QObject::connect(ui->numMeasSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -97,11 +84,12 @@ void MW::connectSignals()
     QObject::connect(ui->spinBox, QOverload<int>::of(&QSpinBox::valueChanged),
                      this, &MW::onTintChanged);
 
+    // Connect set voltage button
+    QObject::connect(ui->setVoltageButton, &QPushButton::clicked, this, &MW::onSetVoltageClicked);
+
     // Connect analyzer parameter change signals
     QObject::connect(ui->frequencyDoubleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                      this, &MW::onFrequencyChanged);
-
-    // QObject::connect(serialPort, &QSerialPort::readyRead, this, &MW::onSerialDataReceived);
 
 }
 
@@ -116,13 +104,15 @@ void MW::onConnectButtonClicked()
 
 }
 
-void MW::receive_data_meas(const double & a, const double & b){
+void MW::receive_data_meas(const double & a, const double & b, const double & v, const double & c){
     xData.append(a);
     yData.append(b);
+    voltageData.append(v);
+    currentData.append(c);
 
     // Also add to measurementData struct if we have an active temperature measurement
     if (temperatureIndex >= 0 && temperatureIndex < measurementData.temperatureData.size()) {
-        measurementData.appendMeasurementPoint(a, a, b);
+        measurementData.appendMeasurementPoint(a, a, b, v, c);
     }
 
     // Mark that we have pending data to plot
@@ -155,11 +145,12 @@ void MW::receive_connected(const bool& con){
     ui->MeasGroupBox->setVisible(con);
     ui->analyzerGroupBox->setVisible(con);
     ui->temoGroupBox->setVisible(con);
+    ui->setVoltageButton->setEnabled(con);
     if (con) {
         qDebug() << "Devices connected successfully.";
         connect(this, &MW::init_meas, meas, &Measurements::startMeasurement);
         connect(this, &MW::send_ui, meas, &Measurements::got_ui_data);
-        connect(this, &MW::pulseParamsChanged, meas, &Measurements::updatePulseParams);
+        connect(this, &MW::biasParamsChanged, meas, &Measurements::updateBiasParams);
         connect(this, &MW::measurementParamsChanged, meas, &Measurements::updateMeasurementParams);
         connect(this, &MW::analyzerFrequencyChanged, meas, &Measurements::updateAnalyzerFrequency);
         connect(meas, &Measurements::sendData, this, &MW::receive_data_meas);
@@ -188,6 +179,8 @@ void MW::onStartButtonClicked()
     // Clear current measurement data (not the stored measurementData)
     xData.clear();
     yData.clear();
+    voltageData.clear();
+    currentData.clear();
     pendingPlotUpdate = false;
 
     // Get measurement parameters from UI
@@ -246,16 +239,19 @@ void MW::onSaveDataButtonClicked()
         out << "#\n";
 
         // Write column headers
-        out << "# Time(s)\tCapacitance(F)\n";
+        out << "# Time(s)\tCapacitance(F)\tVoltage(V)\tCurrent(A)\n";
 
         // Write data for this temperature
         for (int j = 0; j < measurementData.xData[i].size(); ++j) {
             double time = measurementData.xData[i][j];
             double capacitance = measurementData.yData[i][j];
+            double voltage = (j < measurementData.voltageData[i].size()) ? measurementData.voltageData[i][j] : 0.0;
+            double current = (j < measurementData.currentData[i].size()) ? measurementData.currentData[i][j] : 0.0;
 
-            // Write: Time, Capacitance (tab-separated)
             out << QString::number(time, 'e', 6) << "\t"
-                << QString::number(capacitance, 'e', 12) << "\n";
+                << QString::number(capacitance, 'e', 12) << "\t"
+                << QString::number(voltage, 'e', 6) << "\t"
+                << QString::number(current, 'e', 6) << "\n";
         }
 
         file.close();
@@ -273,34 +269,20 @@ void MW::onQuitButtonClicked()
 }
 
 
-void MW::onOffsetChanged()
+void MW::onBiasChanged()
 {
-    // Send all pulse parameters when offset changes
-    double offset = ui->offsetDoubleSpinBox->value();
-    double amplitude = ui->amplitudeDoubleSpinBox->value();
-    double duration = ui->durationSpinBox->value();
+    double biasV = ui->offsetDoubleSpinBox->value();
+    double zeroDurationMs = ui->durationSpinBox->value();
 
-    emit pulseParamsChanged(offset, amplitude, duration);
+    emit biasParamsChanged(biasV, zeroDurationMs);
 }
 
-void MW::onAmplitudeChanged()
+void MW::onZeroDurationChanged()
 {
-    // Send all pulse parameters when amplitude changes
-    double offset = ui->offsetDoubleSpinBox->value();
-    double amplitude = ui->amplitudeDoubleSpinBox->value();
-    double duration = ui->durationSpinBox->value();
+    double biasV = ui->offsetDoubleSpinBox->value();
+    double zeroDurationMs = ui->durationSpinBox->value();
 
-    emit pulseParamsChanged(offset, amplitude, duration);
-}
-
-void MW::onDurationChanged()
-{
-    // Send all pulse parameters when duration changes
-    double offset = ui->offsetDoubleSpinBox->value();
-    double amplitude = ui->amplitudeDoubleSpinBox->value();
-    double duration = ui->durationSpinBox->value();
-
-    emit pulseParamsChanged(offset, amplitude, duration);
+    emit biasParamsChanged(biasV, zeroDurationMs);
 }
 
 void MW::onNumPointsChanged()
@@ -332,21 +314,48 @@ void MW::onFrequencyChanged()
     qDebug() << "Analyzer frequency changed to:" << frequencyMHz << "MHz";
 }
 
+void MW::onSetVoltageClicked()
+{
+    double biasV = ui->offsetDoubleSpinBox->value();
+    double zeroDurationMs = ui->durationSpinBox->value();
+
+    emit biasParamsChanged(biasV, zeroDurationMs);
+    qDebug() << "Set voltage:" << biasV << "V";
+}
+
 void MW::setupPlot()
 {
-    // Configure plot appearance
+    // Configure capacitance plot
     customPlot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom | QCP::iSelectPlottables);
-
-    // Set axis labels
     customPlot->xAxis->setLabel("Time (s)");
     customPlot->yAxis->setLabel("Capacitance (pF)");
-
-    // Set up legend
     customPlot->legend->setVisible(true);
-
-    // Enable grid
     customPlot->xAxis->grid()->setVisible(true);
     customPlot->yAxis->grid()->setVisible(true);
+
+    // Configure voltage/current plot
+    voltagePlot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
+    voltagePlot->xAxis->setLabel("Time (s)");
+    voltagePlot->yAxis->setLabel("Voltage (V)");
+    voltagePlot->xAxis->grid()->setVisible(true);
+    voltagePlot->yAxis->grid()->setVisible(true);
+    voltagePlot->legend->setVisible(true);
+
+    // Right y-axis for current
+    voltagePlot->yAxis2->setVisible(true);
+    voltagePlot->yAxis2->setLabel("Current (A)");
+    voltagePlot->yAxis2->setLabelColor(Qt::red);
+    voltagePlot->yAxis2->setTickLabelColor(Qt::red);
+
+    // Graph 0: Voltage (left axis)
+    voltagePlot->addGraph();
+    voltagePlot->graph(0)->setPen(QPen(Qt::darkGray, 2));
+    voltagePlot->graph(0)->setName("Voltage");
+
+    // Graph 1: Current (right axis)
+    voltagePlot->addGraph(voltagePlot->xAxis, voltagePlot->yAxis2);
+    voltagePlot->graph(1)->setPen(QPen(Qt::red, 2));
+    voltagePlot->graph(1)->setName("Current");
 
     qDebug() << "QCustomPlot initialized";
 }
@@ -369,13 +378,15 @@ void MW::updateAllTemperaturePlots()
     QList<QColor> colors = {Qt::blue, Qt::red, Qt::green, Qt::magenta, Qt::cyan,
                             Qt::darkYellow, Qt::darkBlue, Qt::darkRed, Qt::darkGreen, Qt::darkMagenta};
 
+    int numTemps = measurementData.temperatureData.size();
+
     // Ensure we have enough graphs for all temperatures
-    while (customPlot->graphCount() < measurementData.temperatureData.size()) {
+    while (customPlot->graphCount() < numTemps) {
         customPlot->addGraph();
     }
 
-    // Update each temperature's graph
-    for (int i = 0; i < measurementData.temperatureData.size(); ++i) {
+    // Update each temperature's capacitance graph
+    for (int i = 0; i < numTemps; ++i) {
         if (i < measurementData.xData.size() && !measurementData.xData[i].isEmpty()) {
             // Convert yData from F to pF for display
             QVector<double> xVec = measurementData.xData[i].toVector();
@@ -384,7 +395,6 @@ void MW::updateAllTemperaturePlots()
                 yVec[j] = measurementData.yData[i][j] * 1e12;  // Convert to pF
             }
 
-            // Set graph data and appearance
             customPlot->graph(i)->setData(xVec, yVec);
             customPlot->graph(i)->setPen(QPen(colors[i % colors.size()], 2));
             customPlot->graph(i)->setScatterStyle(QCPScatterStyle::ssCircle);
@@ -392,17 +402,36 @@ void MW::updateAllTemperaturePlots()
         }
     }
 
-    // Auto-scale axes to fit all data
+    // Auto-scale capacitance plot
     customPlot->rescaleAxes();
-
-    // Add some margin
     customPlot->xAxis->scaleRange(1.1, customPlot->xAxis->range().center());
     customPlot->yAxis->scaleRange(1.1, customPlot->yAxis->range().center());
-
-    // Refresh the plot
     customPlot->replot();
 
-    qDebug() << "Plot updated with" << measurementData.temperatureData.size() << "temperature curves";
+    // Update voltage and current plots with the latest measurement data
+    if (voltagePlot && numTemps > 0 && !measurementData.voltageData.isEmpty() &&
+        !measurementData.voltageData.last().isEmpty()) {
+        QVector<double> xVec = measurementData.xData.last().toVector();
+
+        // Voltage graph
+        QVector<double> vVec = measurementData.voltageData.last().toVector();
+        voltagePlot->graph(0)->setData(xVec, vVec);
+
+        // Current graph
+        if (!measurementData.currentData.isEmpty() &&
+            !measurementData.currentData.last().isEmpty()) {
+            QVector<double> cVec = measurementData.currentData.last().toVector();
+            voltagePlot->graph(1)->setData(xVec, cVec);
+        }
+
+        voltagePlot->rescaleAxes();
+        voltagePlot->xAxis->scaleRange(1.1, voltagePlot->xAxis->range().center());
+        voltagePlot->yAxis->scaleRange(1.3, voltagePlot->yAxis->range().center());
+        voltagePlot->yAxis2->scaleRange(1.3, voltagePlot->yAxis2->range().center());
+        voltagePlot->replot();
+    }
+
+    qDebug() << "Plot updated with" << numTemps << "temperature curves + voltage";
 }
 
 void MW::measIsDone(const bool & done){
@@ -415,6 +444,8 @@ void MW::measIsDone(const bool & done){
         // Clear temporary data (measurementData struct retains all data)
         xData.clear();
         yData.clear();
+        voltageData.clear();
+        currentData.clear();
         pendingPlotUpdate = false;
 
         qDebug() << "Measurement sequence completed for temperature:"
