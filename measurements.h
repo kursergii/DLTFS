@@ -48,7 +48,7 @@ class Measurements : public QThread
 
 signals:
     void connected(const bool& status);
-    void resultsReceived();
+    void resultsReceived(); // Signal to indicate new results are available, wait stopper.
     void sendData(const double&, const double&, const double&, const double&);
     void isDone(const bool& done);
 

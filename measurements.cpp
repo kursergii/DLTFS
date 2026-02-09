@@ -55,7 +55,7 @@ bool Measurements::connectSMU() {
         qDebug() << "Failed to initialize K236";
         return false;
     }
-
+    
     // Set initial bias voltage with compliance
     if (!smu->setVoltageSource(biasVoltage, 0.1)) {
         qDebug() << "Failed to set K236 voltage source";

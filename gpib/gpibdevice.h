@@ -2,7 +2,10 @@
 #define GPIBDEVICE_H
 
 #include <QString>
+
+#ifdef USE_GPIB
 #include <gpib/ib.h>
+#endif
 
 class GpibDevice
 {

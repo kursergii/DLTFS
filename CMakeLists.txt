@@ -11,6 +11,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets PrintSupport)
 
+# GPIB support - disable on systems without linux-gpib (e.g. macOS)
+option(USE_GPIB "Enable GPIB hardware support (requires linux-gpib)" OFF)
+
 set(PROJECT_SOURCES
     main.cpp
     mw.cpp
@@ -35,5 +38,12 @@ target_include_directories(DLTFS PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(DLTFS PRIVATE
     Qt6::Widgets
     Qt6::PrintSupport
-    gpib
 )
+
+if(USE_GPIB)
+    target_compile_definitions(DLTFS PRIVATE USE_GPIB)
+    target_link_libraries(DLTFS PRIVATE gpib)
+    message(STATUS "GPIB support: ENABLED")
+else()
+    message(STATUS "GPIB support: DISABLED (stub mode)")
+endif()
