@@ -28,12 +28,23 @@ MW::MW(QWidget *parent)
 
     // Create Save Data button programmatically
     saveDataButton = new QPushButton("Save Data", this);
-    saveDataButton->setGeometry(10, 470, 221, 51);
+    saveDataButton->setGeometry(10, 540, 221, 51);
     QFont buttonFont;
     buttonFont.setPointSize(16);
     buttonFont.setBold(true);
     saveDataButton->setFont(buttonFont);
     saveDataButton->setFlat(true);
+
+    // Live data display labels
+    liveCapLabel = new QLabel("C: ---", this);
+    liveCapLabel->setGeometry(10, 470, 221, 20);
+    liveCapLabel->setFont(QFont("Monospace", 9));
+    liveVoltLabel = new QLabel("V: ---", this);
+    liveVoltLabel->setGeometry(10, 490, 221, 20);
+    liveVoltLabel->setFont(QFont("Monospace", 9));
+    liveCurLabel = new QLabel("I: ---", this);
+    liveCurLabel->setGeometry(10, 510, 221, 20);
+    liveCurLabel->setFont(QFont("Monospace", 9));
 
     ui->pulserGroupBox->setFlat(true);
     ui->MeasGroupBox->setFlat(true);
@@ -154,6 +165,7 @@ void MW::receive_connected(const bool& con){
         connect(this, &MW::measurementParamsChanged, meas, &Measurements::updateMeasurementParams);
         connect(this, &MW::analyzerFrequencyChanged, meas, &Measurements::updateAnalyzerFrequency);
         connect(meas, &Measurements::sendData, this, &MW::receive_data_meas);
+        connect(meas, &Measurements::sendLiveData, this, &MW::receiveLiveData);
         connect(meas, &Measurements::isDone, this, &MW::measIsDone);
 
     } else {
@@ -321,6 +333,13 @@ void MW::onSetVoltageClicked()
 
     emit biasParamsChanged(biasV, zeroDurationMs);
     qDebug() << "Set voltage:" << biasV << "V";
+}
+
+void MW::receiveLiveData(double capacitance, double voltage, double current)
+{
+    liveCapLabel->setText(QString("C: %1 pF").arg(capacitance * 1e12, 0, 'f', 3));
+    liveVoltLabel->setText(QString("V: %1 V").arg(voltage, 0, 'f', 3));
+    liveCurLabel->setText(QString("I: %1 A").arg(current, 0, 'e', 3));
 }
 
 void MW::setupPlot()

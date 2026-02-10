@@ -14,21 +14,13 @@ GpibDevice::~GpibDevice()
     disconnect();
 }
 
-#ifdef USE_GPIB
-
 bool GpibDevice::connect()
 {
     if (m_connected) {
-        return true; // Already connected
+        return true;
     }
 
     // ibdev(board, pad, sad, timeout, eot, eos)
-    // board = GPIB board number
-    // pad = primary address
-    // sad = 0 (no secondary address)
-    // timeout = T3s (3 second timeout)
-    // eot = 1 (assert EOI on write)
-    // eos = 0 (disable EOS detection)
     m_descriptor = ibdev(m_board, m_address, 0, T3s, 1, 0);
 
     if (m_descriptor < 0) {
@@ -48,6 +40,14 @@ void GpibDevice::disconnect()
         m_descriptor = -1;
         m_connected = false;
         qDebug() << "Disconnected from GPIB device at address" << m_address;
+    }
+}
+
+void GpibDevice::clearDevice()
+{
+    if (m_connected && m_descriptor >= 0) {
+        ibclr(m_descriptor);
+        qDebug() << "GPIB device clear sent to address" << m_address;
     }
 }
 
@@ -119,49 +119,6 @@ QString GpibDevice::readServiceRequestData(int maxLength)
     return QString();
 }
 
-#else // !USE_GPIB — stub implementations
-
-bool GpibDevice::connect()
-{
-    setError("GPIB support not compiled (USE_GPIB=OFF)");
-    qWarning() << "GPIB stub: connect() called for address" << m_address << "- GPIB not available";
-    return false;
-}
-
-void GpibDevice::disconnect()
-{
-    m_connected = false;
-}
-
-bool GpibDevice::write(const QString& command)
-{
-    Q_UNUSED(command);
-    setError("GPIB support not compiled (USE_GPIB=OFF)");
-    return false;
-}
-
-QString GpibDevice::read(int maxLength)
-{
-    Q_UNUSED(maxLength);
-    setError("GPIB support not compiled (USE_GPIB=OFF)");
-    return QString();
-}
-
-bool GpibDevice::checkServiceRequest()
-{
-    return false;
-}
-
-QString GpibDevice::readServiceRequestData(int maxLength)
-{
-    Q_UNUSED(maxLength);
-    return QString();
-}
-
-#endif // USE_GPIB
-
-// These methods don't use GPIB directly — shared between both modes
-
 bool GpibDevice::isConnected() const
 {
     return m_connected;
@@ -179,33 +136,6 @@ QString GpibDevice::queryIdentification()
     }
 
     return read();
-}
-
-bool GpibDevice::setExternalTrigger()
-{
-    if (!m_connected) {
-        setError("Device not connected");
-        return false;
-    }
-
-    if (!write(":TRIG:SOUR EXT\n")) {
-        return false;
-    }
-
-    if (!write(":TRIG:MODE TRIG\n")) {
-        return false;
-    }
-
-    if (!write(":TRIG:SLOP POS\n")) {
-        return false;
-    }
-
-    if (!write(":OUTP ON\n")) {
-        return false;
-    }
-
-    qDebug() << "HP8114A configured for external trigger (rising edge)";
-    return true;
 }
 
 void GpibDevice::setError(const QString& error)

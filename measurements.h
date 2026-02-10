@@ -35,6 +35,7 @@ class Measurements : public QThread
             qWarning() << "Not all devices connected - some functionality may be limited";
         }else {
             isReadyForInitialMeasurement = true;
+            devicesReady = true;
             qDebug() << "All devices connected successfully";
         }
 
@@ -49,6 +50,7 @@ class Measurements : public QThread
 signals:
     void connected(const bool& status);
     void resultsReceived(); // Signal to indicate new results are available, wait stopper.
+    void sendLiveData(double capacitance, double voltage, double current);
     void sendData(const double&, const double&, const double&, const double&);
     void isDone(const bool& done);
 
@@ -94,6 +96,8 @@ private:
     void waiter(int time);
     void applyBiasSettings();
     void doMeasurement();
+    double readCapacitance();  // Read one capacitance value from analyzer
+    bool devicesReady = false;
 };
 
 #endif // MEASUREMENTS_H

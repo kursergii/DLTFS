@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QTimer>
+#include <QLabel>
 #include "measurements.h"
 #include "qcustomplot/qcustomplot.h"
 #include "gpib/keithley236smu.h"
@@ -48,6 +49,7 @@ private slots:
     void onTintChanged();
     void onFrequencyChanged();
     void onSetVoltageClicked();
+    void receiveLiveData(double capacitance, double voltage, double current);
     void measIsDone(const bool & done);
 
 private:
@@ -55,6 +57,9 @@ private:
     QCustomPlot *customPlot;    // Plot widget for displaying measurement data
     QCustomPlot *voltagePlot;   // Plot widget for displaying applied voltage
     QPushButton *saveDataButton;  // Save data button (created programmatically)
+    QLabel *liveCapLabel;
+    QLabel *liveVoltLabel;
+    QLabel *liveCurLabel;
     void setupPlot();
     void updatePlot(const QList<double>&, const QList<double>&);
     void updatePlotBatched();  // Batched update for performance

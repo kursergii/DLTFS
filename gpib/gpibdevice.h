@@ -2,10 +2,7 @@
 #define GPIBDEVICE_H
 
 #include <QString>
-
-#ifdef USE_GPIB
 #include <gpib/ib.h>
-#endif
 
 class GpibDevice
 {
@@ -16,13 +13,11 @@ public:
     bool connect();
     void disconnect();
     bool isConnected() const;
+    void clearDevice();  // Send GPIB device clear (ibclr)
 
     QString queryIdentification();
     bool write(const QString& command);
     QString read(int maxLength = 256);
-
-    // HP8114A Pulser specific methods
-    bool setExternalTrigger();
 
     // Service Request detection
     bool checkServiceRequest();

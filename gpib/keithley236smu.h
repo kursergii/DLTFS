@@ -49,8 +49,9 @@ public:
     double zeroDuration() const { return m_zeroDuration; }
     void setZeroDuration(double seconds) { m_zeroDuration = seconds; }
 
-private:
     bool sendCommand(const QString& command);
+
+private:
 
     double m_biasVoltage;
     double m_compliance;

@@ -3,23 +3,38 @@
 #include <QEventLoop>
 #include <QElapsedTimer>
 
+double Measurements::readCapacitance()
+{
+    if (!analyzer || !analyzer->isConnected()) return 0.0;
+
+    if (!analyzer->write("*CLS;*OPC?\n")) return 0.0;
+    analyzer->read();
+
+    if (!analyzer->write("*TRG\n")) return 0.0;
+
+    if (!analyzer->write("TRAC:VAL? DTR,1\n")) return 0.0;
+
+    QString response = analyzer->read(1024);
+    if (response.isEmpty()) return 0.0;
+
+    int commaPos = response.indexOf(',');
+    bool ok;
+    double capacitance;
+    if (commaPos > 0) {
+        capacitance = response.left(commaPos).toDouble(&ok);
+    } else {
+        capacitance = response.trimmed().toDouble(&ok);
+    }
+    return ok ? capacitance : 0.0;
+}
+
 void Measurements::running() {
-    waiter(100);
-    qDebug() << "Measurements running...";
-    if (isMeasuring) {
-        doMeasurement();
-        emit isDone(true);
-        isMeasuring = false;
-    }
-    else if (isReadyForInitialMeasurement) {
-        applyBiasSettings();
-        isReadyForInitialMeasurement = false;
-    }
-    else if (isBiasUpdateRequested) {
+    // Handle flags first (bias update, frequency update)
+    if (isBiasUpdateRequested) {
         applyBiasSettings();
         isBiasUpdateRequested = false;
     }
-    else if (isFrequencyUpdateRequested) {
+    if (isFrequencyUpdateRequested) {
         if (analyzer && analyzer->isConnected()) {
             if (analyzer->setupForMeasurement(pendingFrequencyHz)) {
                 qDebug() << "Analyzer frequency updated to" << (pendingFrequencyHz / 1e6) << "MHz";
@@ -28,6 +43,27 @@ void Measurements::running() {
             }
         }
         isFrequencyUpdateRequested = false;
+    }
+    if (isReadyForInitialMeasurement) {
+        applyBiasSettings();
+        isReadyForInitialMeasurement = false;
+    }
+
+    // If "Start" was pressed, run the measurement sequence
+    if (isMeasuring) {
+        doMeasurement();
+        emit isDone(true);
+        isMeasuring = false;
+        return;
+    }
+
+    // Otherwise: continuous live streaming
+    if (devicesReady) {
+        double cap = readCapacitance();
+        double cur = smu->readCurrent();
+        emit sendLiveData(cap, biasVoltage, cur);
+    } else {
+        waiter(100);
     }
 }
 
@@ -42,7 +78,6 @@ void Measurements::waiter(int time) {
 }
 
 bool Measurements::connectSMU() {
-    // Connect to Keithley 236 SMU (GPIB address 16)
     if (!smu->connect()) {
         qDebug() << "Failed to connect to K236:" << smu->getLastError();
         return false;
@@ -50,22 +85,18 @@ bool Measurements::connectSMU() {
 
     qDebug() << "K236: GPIB connection established";
 
-    // Initialize the SMU (includes reset and voltage source mode setup)
     if (!smu->initialize()) {
         qDebug() << "Failed to initialize K236";
         return false;
     }
-    
-    // Set initial bias voltage with compliance
+
     if (!smu->setVoltageSource(biasVoltage, 0.1)) {
         qDebug() << "Failed to set K236 voltage source";
         return false;
     }
 
-    // Set zero-bias duration
     smu->setZeroDuration(zeroDuration);
 
-    // Turn output on
     if (!smu->outputOn()) {
         qDebug() << "Failed to enable K236 output";
         return false;
@@ -76,49 +107,46 @@ bool Measurements::connectSMU() {
 }
 
 bool Measurements::connectAnalyzer() {
-    // Step 1: Establish GPIB connection to HP 4291A Impedance Analyzer (address 17)
     if (!analyzer->connect()) {
         qWarning() << "HP4291A: Failed to connect -" << analyzer->getLastError();
         return false;
     }
     qDebug() << "HP4291A: GPIB connection established";
 
-    // Step 2: Verify device identification
-    QString analyzerID = analyzer->queryIdentification();
-    if (analyzerID.isEmpty()) {
-        qWarning() << "HP4291A: Failed to query device identification";
+    // Send device clear to reset GPIB interface
+    analyzer->clearDevice();
+    QThread::msleep(200);
+
+    if (!analyzer->write("*RST\n")) {
+        qWarning() << "HP4291A: Failed to reset instrument";
         return false;
     }
-    qDebug() << "HP4291A: Device ID:" << analyzerID;
+    QThread::msleep(500);
 
     if (!analyzer->write("*CLS\n")) {
-        qWarning() << "HP4291A: Failed to clear status at point";
+        qWarning() << "HP4291A: Failed to clear status";
         return false;
     }
 
-    // Step 3: Setup measurement frequency (1000 MHz for DLTFS)
-    double initialFrequency = 1000e6;  // 1000 MHz
+    double initialFrequency = 1000e6;
     if (!analyzer->setupForMeasurement(initialFrequency)) {
         qWarning() << "HP4291A: Failed to setup measurement frequency";
         return false;
     }
     qDebug() << "HP4291A: Measurement frequency set to" << (initialFrequency / 1e6) << "MHz";
 
-    // Step 4: Disable math functions for raw capacitance data
     if (!analyzer->disableMathFunctions()) {
         qWarning() << "HP4291A: Failed to disable math functions";
         return false;
     }
     qDebug() << "HP4291A: Math functions disabled - raw data mode";
 
-    // Step 5: Set measurement format to CP (Capacitance parallel + Dissipation factor)
     if (!analyzer->setMeasurementFormat(HP4291Analyzer::CP)) {
         qWarning() << "HP4291A: Failed to set measurement format to CP";
         return false;
     }
     qDebug() << "HP4291A: Measurement format set to CP (Capacitance-Dissipation)";
 
-    // Step 6: Configure BUS trigger mode (software trigger via GPIB)
     if (!analyzer->setupTrigger(false)) {
         qWarning() << "HP4291A: Failed to setup BUS trigger";
         return false;
@@ -136,10 +164,8 @@ bool Measurements::connectAnalyzer() {
 
 void Measurements::updateBiasParams(double biasV, double zeroDurationMs) {
     biasVoltage = biasV;
-    zeroDuration = zeroDurationMs / 1000.0;  // Convert ms to seconds
+    zeroDuration = zeroDurationMs / 1000.0;
     qDebug() << "Bias params updated: Bias=" << biasV << "V, Zero duration=" << zeroDurationMs << "ms";
-
-    // Set flag so the worker thread applies settings via GPIB
     isBiasUpdateRequested = true;
 }
 
@@ -161,14 +187,12 @@ void Measurements::applyBiasSettings() {
         return;
     }
 
-    // Update bias voltage on the SMU
     if (smu->setSourceVoltage(biasVoltage)) {
         qDebug() << "K236: Bias voltage set to" << biasVoltage << "V";
     } else {
         qDebug() << "K236: Failed to set bias voltage";
     }
 
-    // Update zero-bias duration
     smu->setZeroDuration(zeroDuration);
     qDebug() << "K236: Zero duration set to" << zeroDuration << "s";
 }
@@ -177,223 +201,125 @@ void Measurements::applyBiasSettings() {
 void Measurements::doMeasurement()
 {
     qDebug() << "Starting DLTFS measurement sequence...";
-    qDebug() << "Parameters: Points=" << totalPoints << ", Integration time=" << tint << "s";
+    qDebug() << "Parameters: Points=" << totalPoints << ", Time step=" << tint << "s";
     qDebug() << "Bias=" << biasVoltage << "V, Zero duration=" << zeroDuration << "s";
 
     if (!analyzer || !analyzer->isConnected()) {
-        qWarning() << "HP4291A: Analyzer not connected, cannot start measurement";
+        qWarning() << "HP4291A: Analyzer not connected";
         return;
     }
-
     if (!smu || !smu->isConnected()) {
-        qWarning() << "K236: SMU not connected, cannot start measurement";
+        qWarning() << "K236: SMU not connected";
         return;
     }
 
-    if (!analyzer->write("DISP:TRAC18:CLE\n")) {
-        qWarning() << "HP4291A: Failed to clear status for batch";
-    }
+    // Clear analyzer
+    analyzer->write("DISP:TRAC18:CLE\n");
     QThread::msleep(100);
+    analyzer->write("*CLS\n");
 
-    // Clear and reset trace buffer
-    if (!analyzer->write("*CLS\n")) {
-        qWarning() << "HP4291A: Failed to clear status for batch";
-    }
-
-    // HP4291A has a 201 point buffer limit
-    const int ANALYZER_MAX_POINTS = 201;
-
-    // Calculate number of batches needed
-    int numBatches = (totalPoints + ANALYZER_MAX_POINTS - 1) / ANALYZER_MAX_POINTS;
-    qDebug() << "HP4291A: Total batches required:" << numBatches;
-
-    // Arrays to store all measurement data
-    QList<double> xData;
-    QList<double> yData;
-    xData.reserve(totalPoints);
-    yData.reserve(totalPoints);
-
-    // Pre-pulse baseline: collect data for 1s at DC bias before triggering the pulse
-    const int PRE_PULSE_MS = 1000;
-    QElapsedTimer prePulseTimer;
-    prePulseTimer.start();
-
-    qDebug() << "HP4291A: Collecting pre-pulse baseline for" << PRE_PULSE_MS << "ms...";
-
-    while (prePulseTimer.elapsed() < PRE_PULSE_MS) {
-        if (isInterruptionRequested()) return;
-
-        if (!analyzer->write("*CLS;*OPC?\n")) continue;
-        analyzer->read();
-
-        if (!analyzer->write("*TRG\n")) continue;
-
-        if (analyzer->write("TRAC:VAL? DTR,1\n")) {
-            QString response = analyzer->read(1024);
-            if (!response.isEmpty()) {
-                int commaPos = response.indexOf(',');
-                bool ok;
-                double capacitance;
-                if (commaPos > 0) {
-                    capacitance = response.left(commaPos).toDouble(&ok);
-                } else {
-                    capacitance = response.trimmed().toDouble(&ok);
-                }
-                if (ok) {
-                    // Negative time = before pulse
-                    double t = -(PRE_PULSE_MS - prePulseTimer.elapsed()) / 1000.0;
-                    double current = smu->readCurrent();
-                    xData.append(t);
-                    yData.append(capacitance);
-                    emit sendData(t, capacitance, biasVoltage, current);
-                }
-            }
-        }
-    }
-
-    qDebug() << "HP4291A: Pre-pulse baseline collected:" << xData.size() << "points";
-
-    // Emit voltage drop to 0V at pulse start
-    emit sendData(0.0, yData.isEmpty() ? 0.0 : yData.last(), 0.0, 0.0);
-
-    // Perform zero-bias pulse: drop to 0V, wait, restore bias
-    // This creates the transient that the analyzer will capture
-    qDebug() << "K236: Triggering zero-bias pulse...";
-    if (!smu->trigger()) {
-        qWarning() << "K236: Failed to trigger zero-bias pulse";
-        return;
-    }
-    qDebug() << "K236: Zero-bias pulse complete, bias restored";
-
-    // Emit voltage restored to bias at pulse end
-    double currentAfterPulse = smu->readCurrent();
-    emit sendData(zeroDuration, yData.isEmpty() ? 0.0 : yData.last(), biasVoltage, currentAfterPulse);
-
-    // t=0 is the moment bias is restored (after pulse)
-    QElapsedTimer globalTimer;  // For recording time after pulse
+    QElapsedTimer globalTimer;
     globalTimer.start();
 
-    QElapsedTimer intervalTimer;  // For maintaining TINT intervals
+    QElapsedTimer intervalTimer;
     intervalTimer.start();
 
-    // Process measurements in batches
-    for (int batch = 0; batch < numBatches; ++batch) {
-        // Calculate batch parameters
-        int batchStartPoint = batch * ANALYZER_MAX_POINTS;
-        int pointsInBatch = qMin(ANALYZER_MAX_POINTS, totalPoints - batchStartPoint);
+    // === Phase 1: 1 second of data at DC bias (pre-pulse, negative time) ===
+    const int PRE_PULSE_MS = 1000;
+    qDebug() << "Phase 1: Collecting 1s pre-pulse baseline at DC bias...";
 
-        qDebug() << QString("HP4291A: Starting batch %1/%2 (points %3-%4)")
-                    .arg(batch + 1)
-                    .arg(numBatches)
-                    .arg(batchStartPoint + 1)
-                    .arg(batchStartPoint + pointsInBatch);
+    while (globalTimer.elapsed() < PRE_PULSE_MS) {
+        if (isInterruptionRequested()) return;
 
-        // Reset analyzer for new batch (except first batch - already configured)
-        if (batch > 0) {
-            qDebug() << "HP4291A: Resetting analyzer for new batch...";
+        double cap = readCapacitance();
+        double cur = smu->readCurrent();
+        // Time relative to pulse moment: negative = before pulse
+        double t = (globalTimer.elapsed() - PRE_PULSE_MS) / 1000.0;
 
-            // Clear and reset trace buffer
-            if (!analyzer->write("*CLS\n")) {
-                qWarning() << "HP4291A: Failed to clear status for batch" << batch;
-            }
+        emit sendData(t, cap, biasVoltage, cur);
 
-            // Restart interval timer after batch reset delay
-            intervalTimer.restart();
+        // Maintain timing
+        qint64 elapsed = intervalTimer.elapsed();
+        qint64 target = static_cast<qint64>(tint * 1000);
+        if (target - elapsed > 0) {
+            QThread::msleep(target - elapsed);
         }
-
-        // Collect points for this batch
-        for (int i = 0; i < pointsInBatch; ++i) {
-            int globalIndex = batchStartPoint + i;
-            int batchLocalIndex = i + 1;  // Analyzer point numbering is 1-based
-
-            // Check for thread interruption
-            if (isInterruptionRequested()) {
-                qWarning() << "HP4291A: Measurement stopped by user at point" << globalIndex;
-                return;
-            }
-
-            // Clear status and query operation complete
-            if (!analyzer->write("*CLS;*OPC?\n")) {
-                qWarning() << "HP4291A: Failed to clear status at point" << globalIndex;
-                continue;
-            }
-            analyzer->read();  // Read OPC response
-
-            // Send BUS trigger
-            if (!analyzer->write("*TRG\n")) {
-                qWarning() << "HP4291A: Failed to send trigger at point" << globalIndex;
-                continue;
-            }
-
-            // Read measurement value - use batch-local index for TRAC:VAL command
-            QString cmd = QString("TRAC:VAL? DTR,%1\n").arg(batchLocalIndex);
-            if (analyzer->write(cmd)) {
-                QString response = analyzer->read(1024);
-                if (!response.isEmpty()) {
-                    // Parse Cp value (first value before comma)
-                    int commaPos = response.indexOf(',');
-                    if (commaPos > 0) {
-                        bool ok;
-                        double capacitance = response.left(commaPos).toDouble(&ok);
-                        if (ok) {
-                            yData.append(capacitance);
-                        } else {
-                            yData.append(0.0);
-                            qWarning() << "HP4291A: Failed to parse capacitance at point" << globalIndex;
-                        }
-                    } else {
-                        // No comma, try converting whole response
-                        bool ok;
-                        double capacitance = response.trimmed().toDouble(&ok);
-                        yData.append(ok ? capacitance : 0.0);
-                    }
-                } else {
-                    yData.append(0.0);
-                    qWarning() << "HP4291A: Empty response at point" << globalIndex;
-                }
-            } else {
-                yData.append(0.0);
-                qWarning() << "HP4291A: Failed to write command at point" << globalIndex;
-            }
-
-            // Read current from SMU
-            double measuredCurrent = smu->readCurrent();
-
-            // Capture actual elapsed time in seconds (from global start)
-            double elapsedTime = globalTimer.elapsed() / 1000.0;
-            xData.append(elapsedTime);
-
-            // Emit progress update with data
-            emit sendData(xData.last(), yData.last(), biasVoltage, measuredCurrent);
-
-            // Display progress every 10 points or at batch boundaries
-            if ((globalIndex + 1) % 10 == 0 || (i + 1) == pointsInBatch) {
-                qDebug() << QString("HP4291A: Point %1/%2 (batch %3/%4): %5s, Cp=%6F")
-                            .arg(globalIndex + 1)
-                            .arg(totalPoints)
-                            .arg(batch + 1)
-                            .arg(numBatches)
-                            .arg(elapsedTime, 0, 'f', 1)
-                            .arg(yData.last(), 0, 'E', 3);
-            }
-
-            // Maintain timing interval
-            qint64 elapsedSinceLastPoint = intervalTimer.elapsed();
-            qint64 targetInterval = static_cast<qint64>(tint * 1000);  // TINT in milliseconds
-            qint64 remainingTime = targetInterval - elapsedSinceLastPoint;
-
-            if (remainingTime > 0) {
-                QThread::msleep(remainingTime);
-            }
-
-            // Restart interval timer for next point
-            intervalTimer.restart();
-        }
-
-        qDebug() << QString("HP4291A: Batch %1/%2 complete").arg(batch + 1).arg(numBatches);
+        intervalTimer.restart();
     }
 
-    qDebug() << "Measurement collection complete";
-    qDebug() << "Total points collected:" << yData.size();
-    qDebug() << "Total time:" << (globalTimer.elapsed() / 1000.0) << "seconds";
+    qDebug() << "Phase 1 complete.";
+
+    // === Phase 2: Zero-bias pulse ===
+    qDebug() << "Phase 2: Zero-bias pulse for" << zeroDuration << "s...";
+
+    // Emit marker at pulse start (t=0, V=0)
+    double lastCap = readCapacitance();
+    emit sendData(0.0, lastCap, 0.0, 0.0);
+
+    // Drop to 0V
+    smu->sendCommand("B0.0,0,0X");
+
+    // Continue reading during zero-bias period
+    QElapsedTimer pulseTimer;
+    pulseTimer.start();
+    int zeroDurationMs = static_cast<int>(zeroDuration * 1000);
+
+    while (pulseTimer.elapsed() < zeroDurationMs) {
+        if (isInterruptionRequested()) return;
+
+        double cap = readCapacitance();
+        double cur = smu->readCurrent();
+        double t = pulseTimer.elapsed() / 1000.0;  // time during pulse
+
+        emit sendData(t, cap, 0.0, cur);
+
+        qint64 elapsed = intervalTimer.elapsed();
+        qint64 target = static_cast<qint64>(tint * 1000);
+        if (target - elapsed > 0) {
+            QThread::msleep(target - elapsed);
+        }
+        intervalTimer.restart();
+    }
+
+    // Restore DC bias
+    smu->setSourceVoltage(biasVoltage);
+    qDebug() << "Phase 2 complete. Bias restored.";
+
+    // === Phase 3: Post-pulse transient (totalPoints at DC bias) ===
+    qDebug() << "Phase 3: Collecting" << totalPoints << "post-pulse points...";
+
+    // Reset timer for post-pulse time axis
+    QElapsedTimer postTimer;
+    postTimer.start();
+    intervalTimer.restart();
+
+    double pulseEndTime = zeroDuration;  // t offset where bias was restored
+
+    for (int i = 0; i < totalPoints; ++i) {
+        if (isInterruptionRequested()) {
+            qWarning() << "Measurement stopped at point" << i;
+            return;
+        }
+
+        double cap = readCapacitance();
+        double cur = smu->readCurrent();
+        double t = pulseEndTime + postTimer.elapsed() / 1000.0;
+
+        emit sendData(t, cap, biasVoltage, cur);
+
+        if ((i + 1) % 50 == 0) {
+            qDebug() << "Point" << (i + 1) << "/" << totalPoints
+                     << "t=" << t << "s, Cp=" << cap;
+        }
+
+        // Maintain timing
+        qint64 elapsed = intervalTimer.elapsed();
+        qint64 target = static_cast<qint64>(tint * 1000);
+        if (target - elapsed > 0) {
+            QThread::msleep(target - elapsed);
+        }
+        intervalTimer.restart();
+    }
+
+    qDebug() << "Measurement complete. Total time:" << (globalTimer.elapsed() / 1000.0) << "s";
 }
