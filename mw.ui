@@ -345,7 +345,7 @@ Meausurements</string>
       <x>10</x>
       <y>570</y>
       <width>221</width>
-      <height>80</height>
+      <height>120</height>
      </rect>
     </property>
     <property name="title">
@@ -354,6 +354,112 @@ Meausurements</string>
     <property name="flat">
      <bool>true</bool>
     </property>
+    <widget class="QLabel" name="tempCurrentLabel">
+     <property name="geometry">
+      <rect>
+       <x>10</x>
+       <y>25</y>
+       <width>201</width>
+       <height>20</height>
+      </rect>
+     </property>
+     <property name="font">
+      <font>
+       <family>Monospace</family>
+       <pointsize>10</pointsize>
+       <bold>true</bold>
+      </font>
+     </property>
+     <property name="text">
+      <string>T: --- K</string>
+     </property>
+    </widget>
+    <widget class="QLabel" name="tempAvgLabel">
+     <property name="geometry">
+      <rect>
+       <x>10</x>
+       <y>48</y>
+       <width>201</width>
+       <height>16</height>
+      </rect>
+     </property>
+     <property name="font">
+      <font>
+       <family>Monospace</family>
+       <pointsize>8</pointsize>
+      </font>
+     </property>
+     <property name="text">
+      <string>Avg50: --- K  Avg5: --- K</string>
+     </property>
+    </widget>
+    <widget class="QLabel" name="tempSetpointLabel">
+     <property name="geometry">
+      <rect>
+       <x>10</x>
+       <y>72</y>
+       <width>80</width>
+       <height>21</height>
+      </rect>
+     </property>
+     <property name="text">
+      <string>Setpoint (K):</string>
+     </property>
+    </widget>
+    <widget class="QSpinBox" name="tempSetpointSpinBox">
+     <property name="geometry">
+      <rect>
+       <x>90</x>
+       <y>70</y>
+       <width>61</width>
+       <height>25</height>
+      </rect>
+     </property>
+     <property name="minimum">
+      <number>10</number>
+     </property>
+     <property name="maximum">
+      <number>350</number>
+     </property>
+     <property name="value">
+      <number>300</number>
+     </property>
+    </widget>
+    <widget class="QLabel" name="tempDeltaLabel">
+     <property name="geometry">
+      <rect>
+       <x>10</x>
+       <y>96</y>
+       <width>80</width>
+       <height>21</height>
+      </rect>
+     </property>
+     <property name="text">
+      <string>Delta T (K):</string>
+     </property>
+    </widget>
+    <widget class="QDoubleSpinBox" name="tempDeltaSpinBox">
+     <property name="geometry">
+      <rect>
+       <x>90</x>
+       <y>94</y>
+       <width>61</width>
+       <height>25</height>
+      </rect>
+     </property>
+     <property name="minimum">
+      <double>0.500000000000000</double>
+     </property>
+     <property name="maximum">
+      <double>10.000000000000000</double>
+     </property>
+     <property name="singleStep">
+      <double>0.100000000000000</double>
+     </property>
+     <property name="value">
+      <double>1.000000000000000</double>
+     </property>
+    </widget>
    </widget>
   </widget>
   <widget class="QMenuBar" name="menubar">

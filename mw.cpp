@@ -22,13 +22,14 @@ MW::MW(QWidget *parent)
     , temperatureIndex(-1)  // No active measurement initially
 {
     meas = new Measurements;
+    picoScope = new PicoScope;
     ui->setupUi(this);
     customPlot = ui->customPlotWidget;
     voltagePlot = ui->voltagePlotWidget;
 
     // Create Save Data button programmatically
     saveDataButton = new QPushButton("Save Data", this);
-    saveDataButton->setGeometry(10, 540, 221, 51);
+    saveDataButton->setGeometry(10, 555, 221, 41);
     QFont buttonFont;
     buttonFont.setPointSize(16);
     buttonFont.setBold(true);
@@ -45,6 +46,9 @@ MW::MW(QWidget *parent)
     liveCurLabel = new QLabel("I: ---", this);
     liveCurLabel->setGeometry(10, 510, 221, 20);
     liveCurLabel->setFont(QFont("Monospace", 9));
+    liveTempLabel = new QLabel("T: ---", this);
+    liveTempLabel->setGeometry(10, 530, 221, 20);
+    liveTempLabel->setFont(QFont("Monospace", 9));
 
     ui->pulserGroupBox->setFlat(true);
     ui->MeasGroupBox->setFlat(true);
@@ -108,11 +112,17 @@ void MW::onConnectButtonClicked()
 {
     qDebug() << "Connecting to devices...";
 
+    // Start GPIB measurement thread
     qDebug() << "Starting measurement sequence in thread...";
     connect(meas, &Measurements::connected, this, &MW::receive_connected);
     connect(meas, &Measurements::finished, meas, &QObject::deleteLater);
     meas->start();
 
+    // Start PicoScope temperature thread
+    connect(picoScope, &PicoScope::temperatureReady, this, &MW::receiveTemperature);
+    connect(picoScope, &PicoScope::connectionStatus, this, &MW::onPicoScopeConnected);
+    connect(picoScope, &PicoScope::finished, picoScope, &QObject::deleteLater);
+    picoScope->start();
 }
 
 void MW::receive_data_meas(const double & a, const double & b, const double & v, const double & c){
@@ -178,9 +188,7 @@ void MW::onStartButtonClicked()
     qDebug() << "Starting measurement sequence...";
     ui->startButton->setEnabled(false);
 
-    // Simulate a new temperature (increment by 10K each time)
-    currentTemperature += 10.0;
-
+    // Use real temperature from PicoScope (rounded to 0.1K)
     // Add new temperature to measurementData
     measurementData.appendTempData(currentTemperature);
     temperatureIndex = measurementData.temperatureData.size() - 1;
@@ -451,6 +459,53 @@ void MW::updateAllTemperaturePlots()
     }
 
     qDebug() << "Plot updated with" << numTemps << "temperature curves + voltage";
+}
+
+void MW::receiveTemperature(double temperatureK)
+{
+    currentTemperature = temperatureK;
+    liveTempLabel->setText(QString("T: %1 K").arg(temperatureK, 0, 'f', 1));
+    ui->tempCurrentLabel->setText(QString("T: %1 K").arg(temperatureK, 0, 'f', 1));
+
+    updateTemperatureAverages();
+    ui->tempAvgLabel->setText(QString("Avg50: %1 K  Avg5: %2 K")
+                                  .arg(avgTemp50, 0, 'f', 1)
+                                  .arg(avgTemp5, 0, 'f', 1));
+}
+
+void MW::onPicoScopeConnected(bool connected)
+{
+    if (connected) {
+        qDebug() << "PicoScope connected - temperature streaming active";
+    } else {
+        qWarning() << "PicoScope connection failed";
+        ui->tempCurrentLabel->setText("T: NOT CONNECTED");
+    }
+}
+
+void MW::updateTemperatureAverages()
+{
+    // Maintain 50-point rolling average
+    if (temperatureHistory.size() < 50) {
+        temperatureHistoryIndex.append(temperatureHistoryIndex.size());
+        temperatureHistory.append(currentTemperature);
+    } else {
+        for (int i = 0; i < 49; ++i)
+            temperatureHistory[i] = temperatureHistory[i + 1];
+        temperatureHistory[49] = currentTemperature;
+    }
+
+    // Calculate 50-point average
+    avgTemp50 = 0;
+    for (int i = 0; i < temperatureHistory.size(); ++i)
+        avgTemp50 += temperatureHistory[i] / temperatureHistory.size();
+
+    // Calculate 5-point average (most recent)
+    avgTemp5 = 0;
+    if (temperatureHistory.size() > 5) {
+        for (int i = temperatureHistory.size(); i > temperatureHistory.size() - 5; --i)
+            avgTemp5 += temperatureHistory[i - 1] / 5.0;
+    }
 }
 
 void MW::measIsDone(const bool & done){

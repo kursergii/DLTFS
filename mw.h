@@ -8,6 +8,7 @@
 #include "qcustomplot/qcustomplot.h"
 #include "gpib/keithley236smu.h"
 #include "gpib/hp4291analyzer.h"
+#include "picoscope/picoscope.h"
 #include "QList"
 
 QT_BEGIN_NAMESPACE
@@ -50,6 +51,8 @@ private slots:
     void onFrequencyChanged();
     void onSetVoltageClicked();
     void receiveLiveData(double capacitance, double voltage, double current);
+    void receiveTemperature(double temperatureK);
+    void onPicoScopeConnected(bool connected);
     void measIsDone(const bool & done);
 
 private:
@@ -60,6 +63,7 @@ private:
     QLabel *liveCapLabel;
     QLabel *liveVoltLabel;
     QLabel *liveCurLabel;
+    QLabel *liveTempLabel;
     void setupPlot();
     void updatePlot(const QList<double>&, const QList<double>&);
     void updatePlotBatched();  // Batched update for performance
@@ -71,8 +75,14 @@ private:
     QList<double> timeData;
     QTimer *plotUpdateTimer;  // Timer for batched plot updates
     bool pendingPlotUpdate;   // Flag for pending updates
-    double currentTemperature;  // Current simulated temperature
+    PicoScope *picoScope;
+    double currentTemperature;  // Current temperature from PicoScope
     int temperatureIndex;  // Index for current temperature measurement
+    QVector<double> temperatureHistory;  // Rolling 50-point history
+    QVector<double> temperatureHistoryIndex;
+    double avgTemp50 = 0.0;
+    double avgTemp5 = 0.0;
+    void updateTemperatureAverages();
     struct Measurementdata {
         QList<double> temperatureData;
         QList<QList<double>> xData;
